@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DP-Boombox_v2</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://code.iconify.design/iconify-icon/1.0.8/iconify-icon.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="app">
+
+        <div id="player-container" class="panel">
+            <div class="tabs-sidebar">
+                <div class="tab-btn" data-target="page-player">
+                    <iconify-icon icon="solar:music-note-line-duotone"></iconify-icon>
+                </div>
+                <div class="tab-btn" data-target="page-saved-songs">
+                    <iconify-icon icon="solar:playlist-broken"></iconify-icon>
+                </div>
+                <div class="tab-btn" data-target="page-settings">
+                    <iconify-icon icon="material-symbols-light:settings-outline"></iconify-icon>
+                </div>
+            </div>
+
+            <div class="page-header modern-header">
+                <div class="section-title">
+                    <div class="title-icon-wrap">
+                        <iconify-icon icon="boxicons:radio-filled"></iconify-icon>
+                    </div>
+                    <div class="title-text">
+                        <h2 id="main-title">Altavoz</h2>
+                        <p id="main-subtitle">Acciones e interacciones rápidas</p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="page-player" class="tab-page">
+                <div class="content-body">
+
+                    <div class="now-playing-container">
+                        <span class="now-playing-label">ESTADO ACTUAL</span>
+                        <div class="now-playing-title" id="now-playing-title">SIN CANCIÓN</div>
+                    </div>
+
+                    <div class="input-group">
+                        <label>URL DE YOUTUBE</label>
+                        <input type="text" id="input-url" placeholder="https://youtu.be/..." required>
+                    </div>
+
+                    <div class="thumbnail-preview-container" id="thumbnail-preview-container">
+                        <div class="empty-state-preview" id="empty-state-preview">
+                            <iconify-icon icon="boxicons:video-filled"></iconify-icon>
+                            <p>PREVIEW DE LA PORTADA<br>DE LA CANCIÓN</p>
+                        </div>
+                        <img src="" id="thumbnail-image"
+                            style="display: none; width: 100%; height: 100%; object-fit: cover; opacity: 0.6; position: absolute; top: 0; left: 0;">
+                    </div>
+
+                </div>
+            </div>
+
+            <div id="page-saved-songs" class="tab-page">
+                <div class="content-body" id="library-split-view">
+
+                    <div class="library-half">
+                        <div class="library-header">
+                            <div class="library-title">
+                                <iconify-icon icon="fluent:library-24-regular" class="lib-icon"></iconify-icon>
+                                <span>Tu biblioteca</span>
+                            </div>
+                            <button class="add-playlist-btn" id="btn-add-playlist" title="Crear nueva lista">
+                                <iconify-icon icon="mdi:plus"></iconify-icon>
+                            </button>
+
+                            <div class="dropdown-menu" id="dropdown-add-playlist">
+                                <button class="dropdown-item" id="btn-create-playlist">
+                                    <iconify-icon icon="mingcute:playlist-add-fill"></iconify-icon>
+                                    <span>Crear nueva lista de reproducción</span>
+                                </button>
+                                <button class="dropdown-item" id="btn-import-playlist">
+                                    <iconify-icon icon="fluent:arrow-import-24-filled"></iconify-icon>
+                                    <span>Importar una lista de reproducción existente</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="library-content" id="library-content">
+                        </div>
+                    </div>
+
+                    <div class="library-half">
+                        <div class="library-header">
+                            <div class="library-title" style="cursor: default;">
+                                <iconify-icon icon="streamline-ultimate:playlist-songs-bold"
+                                    class="lib-icon"></iconify-icon>
+                                <span id="songs-section-title"
+                                    style="font-size: 11px; text-transform: uppercase;">SELECCIONA UNA LISTA</span>
+                            </div>
+                            <button class="add-playlist-btn" id="btn-add-song" title="Añadir canción"
+                                style="display: none;">
+                                <iconify-icon icon="mdi:plus"></iconify-icon>
+                            </button>
+                        </div>
+                        <div class="library-content" id="songs-list-content">
+                            <div class="empty-state">
+                                <iconify-icon icon="mdi:playlist-music-outline"></iconify-icon>
+                                <p>Haz clic en una lista de arriba para ver sus canciones.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <div id="page-settings" class="tab-page">
+                <div class="content-body">
+                    <p class="settings-placeholder-text">Ajustes del altavoz (Próximamente)...</p>
+                </div>
+            </div>
+
+            <div class="global-progress-bar">
+
+                <div class="media-controls-bar">
+                    <div class="media-spacer"></div>
+                    <div class="media-center">
+                        <button class="simple-control-btn" title="Anterior">
+                            <iconify-icon icon="mdi:skip-previous"></iconify-icon>
+                        </button>
+                        <button id="btn-play-action" class="simple-control-btn play-btn" title="Play/Pause" disabled>
+                            <iconify-icon icon="mdi:play-circle"></iconify-icon>
+                        </button>
+                        <button class="simple-control-btn" title="Siguiente">
+                            <iconify-icon icon="mdi:skip-next"></iconify-icon>
+                        </button>
+                    </div>
+
+                    <div class="media-right" style="position: relative; width: 28px; height: 28px;">
+                        <div class="volume-pill" id="volume-pill">
+
+                            <div class="volume-slider-area">
+                                <div class="vertical-slider-wrapper">
+                                    <input type="range" id="input-volume" value="50" min="0" max="100"
+                                        class="styled-slider">
+                                </div>
+                            </div>
+
+                            <button class="volume-pill-btn" id="btn-toggle-volume" title="Volumen">
+                                <iconify-icon icon="mdi:volume-medium" id="volume-icon"></iconify-icon>
+                            </button>
+
+                        </div>
+                    </div>
+                </div>
+
+                <div class="input-group" id="group-progress" style="margin-bottom: 0;">
+                    <div class="slider-current-time">
+                        <span id="current-time">00:00</span>
+                        <input type="range" id="input-progress" value="0" min="0" max="100" class="styled-slider"
+                            disabled>
+                        <span id="total-time">00:00</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="modal-overlay" class="inner-modal-overlay">
+                <div class="inner-modal-content" id="modal-content-container">
+                </div>
+            </div>
+        </div>
+
+        <div class="floating-tooltip" id="volume-tooltip">50%</div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
