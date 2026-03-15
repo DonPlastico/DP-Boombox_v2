@@ -9,7 +9,7 @@ cargarModelo = function(modelo)
 end
 
 mandarNotificacion = function(titulo, descripcion, tipo)
-    local mensaje = titulo .. " - " .. descripcion
+    local mensaje = descripcion
     tipo = tipo or "success"
 
     if Framework == "ESX" then
@@ -212,6 +212,7 @@ end)
 abrirMenuRadio = function(radio, coordsRadio)
     -- Avisamos al script que hemos abierto el menú para bloquear las teclas
     uiAbierta = true
+    radioMenuAbierto = radio -- Guardamos la entidad del altavoz actual
 
     if not radiosActivas[radio] then
         radiosActivas[radio] = {

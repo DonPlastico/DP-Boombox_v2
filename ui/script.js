@@ -13,6 +13,7 @@ let isShuffleEnabled = localStorage.getItem('DPBoombox_Shuffle') === 'true';
 let shuffleQueue = []; // Almacena el orden aleatorio matemático
 let currentShuffleIndex = -1; // Por dónde vamos en la cola aleatoria
 let isAutoChangingSong = false;
+let moveWhileOpen = false; // Ahora se controla desde la BD
 
 
 // ==========================================
@@ -94,6 +95,14 @@ window.addEventListener('message', function (event) {
         case "songEnded":
             playNextSong(true);
             break;
+
+        case "updateMovePrefUI":
+            moveWhileOpen = data.status;
+            const moveSwitch = document.getElementById('setting-move-ped');
+            if (moveSwitch) {
+                moveSwitch.checked = moveWhileOpen;
+            }
+            break;
     }
 });
 
@@ -156,7 +165,7 @@ function openPlayer(data) {
     const titleBox = document.getElementById('now-playing-title');
     if ((currentState === "reproduciendo" || currentState === "pausado") && data.title) {
         titleBox.innerText = data.title;
-        titleBox.style.color = 'var(--success)';
+        titleBox.style.color = 'white';
     } else {
         titleBox.innerText = 'SIN CANCIÓN';
         titleBox.style.color = 'var(--primary-color)';
@@ -164,6 +173,10 @@ function openPlayer(data) {
 
     // Aplicar diseño de botones al abrir según el LocalStorage
     document.getElementById('btn-toggle-shuffle').classList.toggle('active-state', isShuffleEnabled);
+
+    // Sincronizar el botón visual (El valor ya llegó de la BD)
+    const moveSwitch = document.getElementById('setting-move-ped');
+    if (moveSwitch) moveSwitch.checked = moveWhileOpen;
 
     // 🚨 PREVENCIÓN DE CONFLICTOS AL ARRANCAR
     if (isLoopEnabled && isLoopSingleEnabled) {
@@ -489,7 +502,7 @@ document.getElementById('btn-play-action').addEventListener('click', async funct
         document.getElementById('now-playing-title').innerText = "CARGANDO...";
         document.getElementById('now-playing-title').style.color = 'var(--primary-color)';
     } else {
-        document.getElementById('now-playing-title').style.color = 'var(--success)';
+        document.getElementById('now-playing-title').style.color = 'white';
     }
 
     // Mandamos a reproducir a FiveM inmediatamente para que suene ya
@@ -511,7 +524,7 @@ document.getElementById('btn-play-action').addEventListener('click', async funct
             if (currentPlayingUrl === url) {
                 fetchedTitle = data.title || "URL Personalizada";
                 document.getElementById('now-playing-title').innerText = fetchedTitle;
-                document.getElementById('now-playing-title').style.color = 'var(--success)';
+                document.getElementById('now-playing-title').style.color = 'white';
 
                 // Actualizamos el servidor silenciosamente con el nombre real
                 fetchToLua('playerAction', {
@@ -522,7 +535,7 @@ document.getElementById('btn-play-action').addEventListener('click', async funct
         } catch {
             if (currentPlayingUrl === url) {
                 document.getElementById('now-playing-title').innerText = "URL Personalizada";
-                document.getElementById('now-playing-title').style.color = 'var(--success)';
+                document.getElementById('now-playing-title').style.color = 'white';
             }
         }
     }
@@ -905,7 +918,7 @@ function openModalShare(playlistName, shareCode) {
     // Lógica de copiar compatible con FiveM
     document.getElementById('btn-copy-code').addEventListener('click', function () {
         fallbackCopyTextToClipboard(shareCode);
-        this.innerHTML = '<iconify-icon icon="mdi:check-bold" style="color: var(--success);"></iconify-icon>';
+        this.innerHTML = '<iconify-icon icon="mdi:check-bold" style="color: white;"></iconify-icon>';
         setTimeout(() => this.innerHTML = '<iconify-icon icon="mdi:content-copy"></iconify-icon>', 2000);
     });
 }
@@ -1207,8 +1220,8 @@ function renderDeleteModal(data) {
         selectTransfer.addEventListener('change', (e) => {
             if (e.target.value !== "none") {
                 btnConfirm.innerText = "TRASPASAR Y SALIR";
-                btnConfirm.style.background = "var(--success)";
-                btnConfirm.style.borderColor = "var(--success)";
+                btnConfirm.style.background = "white";
+                btnConfirm.style.borderColor = "white";
             } else {
                 btnConfirm.innerText = "ELIMINAR LISTA";
                 btnConfirm.style.background = "var(--danger)";
@@ -1263,6 +1276,8 @@ function deleteSongFromList(songId) {
     console.log("Falta programar el Modal para eliminar la canción con ID:", songId);
     // Aquí abriremos el modal oscuro de confirmación
 }
+
+
 
 // ==========================================
 // FUNCIONES PARA LA MINIATURA DE YOUTUBE
@@ -1672,3 +1687,46 @@ function deleteSongFromList(songId, playlistId) {
         playlistId: playlistId
     });
 }
+
+// ==========================================
+// ⚙️ PANEL DE AJUSTES
+// ==========================================
+
+// BOTÓN: BORRAR TODO (Zona de Peligro)
+document.getElementById('setting-delete-all').addEventListener('click', function () {
+    // 1. Guardamos el icono original y ponemos uno de carga
+    const originalIcon = this.innerHTML;
+    this.innerHTML = '<iconify-icon icon="bx:loader-alt"></iconify-icon>';
+    this.style.opacity = "0.5";
+    this.style.pointerEvents = "none";
+
+    // 2. Mandamos la orden letal a Lua
+    fetchToLua('wipeUserData');
+
+    // 3. Limpiamos la memoria del panel (por si tenía listas abiertas)
+    currentSelectedPlaylistId = null;
+    currentPlaylistSongs = [];
+    document.getElementById('songs-section-title').innerText = "SELECCIONA UNA LISTA PARA VER EL CONTENIDO";
+    document.getElementById('songs-list-content').innerHTML = `
+        <div class="empty-state">
+            <iconify-icon icon="mdi:playlist-music-outline"></iconify-icon>
+            <p>Haz clic en una lista de arriba para ver sus canciones.</p>
+        </div>`;
+    document.getElementById('btn-add-song').style.display = 'none';
+
+    // 4. Lo devolvemos a la pestaña principal del reproductor
+    setTimeout(() => {
+        switchToTab('page-player');
+
+        // Restauramos el botón a su icono original de la papelera
+        this.innerHTML = originalIcon;
+        this.style.opacity = "1";
+        this.style.pointerEvents = "auto";
+    }, 800);
+});
+
+// SWITCH: MOVER PERSONAJE CON UI ABIERTA (AHORA POR BASE DE DATOS)
+document.getElementById('setting-move-ped').addEventListener('change', function (e) {
+    moveWhileOpen = e.target.checked;
+    fetchToLua('updateMovePref', { status: moveWhileOpen }); // Avisamos a Lua para que actualice la BD
+});

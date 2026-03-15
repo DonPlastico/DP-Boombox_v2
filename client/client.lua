@@ -5,6 +5,8 @@ local MODELO_RADIO = GetHashKey('prop_boombox_01')
 local ARMA_DESARMADO = GetHashKey('WEAPON_UNARMED')
 uiAbierta = false
 local tiempoBloqueo = {}
+local moveWhileOpen = false
+radioMenuAbierto = nil
 
 if GetResourceState('es_extended') == 'started' or GetResourceState('es_extended') == 'starting' then
     Framework = 'ESX'
@@ -17,9 +19,9 @@ end
 -- ============================================
 -- NUI CALLBACKS (COMUNICACIÓN VIVO)
 -- ============================================
-
 RegisterNUICallback('closeUI', function(_, cb)
     SetNuiFocus(false, false)
+    radioMenuAbierto = nil
 
     -- EL TRUCO ESTÁ AQUÍ: Retrasamos el aviso de que el menú está cerrado
     -- para que el juego ignore la tecla ESCAPE que acabas de soltar.
@@ -36,6 +38,12 @@ RegisterNUICallback('clickOption', function(data, cb)
     if data.event then
         TriggerEvent(data.event, data.args)
     end
+    cb('ok')
+end)
+
+RegisterNUICallback('updateMovePref', function(data, cb)
+    moveWhileOpen = data.status
+    TriggerServerEvent('DP-Boombox_v2:saveMovePref', data.status) -- 💾 MANDA A GUARDAR A LA BD
     cb('ok')
 end)
 
@@ -387,6 +395,11 @@ RegisterNUICallback('removeSongFromPlaylist', function(data, cb)
     cb('ok')
 end)
 
+RegisterNUICallback('wipeUserData', function(_, cb)
+    TriggerServerEvent('DP-Boombox_v2:wipeUserData')
+    cb('ok')
+end)
+
 -- ============================================
 -- 🚨 AUTO-REPRODUCCIÓN Y CONTROL DE TIEMPO 🚨
 -- ============================================
@@ -463,6 +476,136 @@ CreateThread(function()
         else
             Wait(1000) -- Si el menú está cerrado, descansa para no consumir recursos
         end
+    end
+end)
+
+-- ============================================
+-- 🏃‍♂️ SISTEMA DE MOVIMIENTO CON UI ABIERTA
+-- ============================================
+CreateThread(function()
+    local inputMantenido = false
+
+    while true do
+        if uiAbierta then
+            -- 1. Activamos la función mágica para que el juego siga leyendo el teclado
+            if not inputMantenido then
+                SetNuiFocusKeepInput(true)
+                inputMantenido = true
+            end
+
+            -- 2. BLOQUEOS OBLIGATORIOS SIEMPRE (Para no disparar ni mover la cámara con el ratón)
+            DisableControlAction(0, 1, true) -- Cámara Derecha/Izquierda
+            DisableControlAction(0, 2, true) -- Cámara Arriba/Abajo
+            DisableControlAction(0, 24, true) -- Atacar (Click Izquierdo)
+            DisableControlAction(0, 25, true) -- Apuntar (Click Derecho)
+            DisableControlAction(0, 37, true) -- Rueda de armas (TAB)
+            DisableControlAction(0, 200, true) -- ESC (Para que no cierre el menú de pausa de GTA)
+            DisablePlayerFiring(PlayerPedId(), true) -- Seguro anti-disparos
+
+            -- 3. SI EL SWITCH ESTÁ APAGADO: Bloqueamos también el movimiento
+            if not moveWhileOpen then
+                DisableControlAction(0, 30, true) -- Mover Izquierda/Derecha (A/D)
+                DisableControlAction(0, 31, true) -- Mover Arriba/Abajo (W/S)
+                DisableControlAction(0, 21, true) -- Sprint (Shift)
+                DisableControlAction(0, 22, true) -- Salto (Espacio)
+                DisableControlAction(0, 36, true) -- Agacharse (CTRL)
+            end
+
+            Wait(0) -- Corre ultrarrápido mientras la UI esté abierta
+        else
+            -- Si la UI se cierra, quitamos la función mágica
+            if inputMantenido then
+                SetNuiFocusKeepInput(false)
+                inputMantenido = false
+            end
+            Wait(250) -- Descansa cuando la UI está cerrada
+        end
+    end
+end)
+
+-- ============================================
+-- 📏 VIGILANTE DE DISTANCIA (AUTO-CIERRE)
+-- ============================================
+CreateThread(function()
+    while true do
+        local sleep = 1000
+
+        -- Solo gasta recursos si tienes un menú abierto
+        if uiAbierta and radioMenuAbierto then
+            sleep = 500 -- Revisamos cada medio segundo
+
+            -- 1. Comprobamos si el altavoz sigue existiendo en el mundo
+            if DoesEntityExist(radioMenuAbierto) then
+                local playerCoords = GetEntityCoords(PlayerPedId())
+                local radioCoords = GetEntityCoords(radioMenuAbierto)
+                local distancia = #(playerCoords - radioCoords)
+
+                -- 2. Límite de distancia: 5.0 metros
+                if distancia > 5.0 then
+                    SendNUIMessage({
+                        action = "close"
+                    }) -- Ordenamos al JS cerrar la animación
+                    SetNuiFocus(false, false)
+                    uiAbierta = false
+                    radioMenuAbierto = nil
+                    mandarNotificacion('Error', 'Te has alejado demasiado del altavoz.', 'error')
+                end
+            else
+                -- 3. Si el altavoz fue borrado (alguien lo guardó o un admin lo limpió)
+                SendNUIMessage({
+                    action = "close"
+                })
+                SetNuiFocus(false, false)
+                uiAbierta = false
+                radioMenuAbierto = nil
+                mandarNotificacion('Error', 'El altavoz ha desaparecido.', 'error')
+            end
+        end
+
+        Wait(sleep)
+    end
+end)
+
+-- ============================================
+-- 🔄 CARGAR PREFERENCIAS DESDE LA BD
+-- ============================================
+local function CargarPreferenciasDB()
+    if Framework == "ESX" then
+        ESX.TriggerServerCallback('DP-Boombox_v2:getMovePref', function(pref)
+            moveWhileOpen = pref
+            SendNUIMessage({
+                action = "updateMovePrefUI",
+                status = moveWhileOpen
+            })
+        end)
+    elseif Framework == "qb" then
+        QBCore.Functions.TriggerCallback('DP-Boombox_v2:getMovePref', function(pref)
+            moveWhileOpen = pref
+            SendNUIMessage({
+                action = "updateMovePrefUI",
+                status = moveWhileOpen
+            })
+        end)
+    end
+end
+
+-- Cuando el jugador carga en el servidor por primera vez
+RegisterNetEvent('esx:playerLoaded')
+AddEventHandler('esx:playerLoaded', function()
+    Wait(3000)
+    CargarPreferenciasDB()
+end)
+
+RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
+    Wait(3000)
+    CargarPreferenciasDB()
+end)
+
+-- Por si reinicias el script mientras estás dentro probando cosas
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() == resourceName then
+        Wait(2000)
+        CargarPreferenciasDB()
     end
 end)
 

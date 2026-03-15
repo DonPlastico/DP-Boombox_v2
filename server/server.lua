@@ -906,3 +906,135 @@ RegisterServerEvent('DP-Boombox_v2:removeSongFromPlaylist', function(data)
         end
     end)
 end)
+
+-- ============================================
+-- ⚙️ PREFERENCIAS DEL USUARIO (BASE DE DATOS)
+-- ============================================
+
+-- 1. Callback para OBTENER la preferencia al cargar el jugador
+if Framework == "ESX" then
+    ESX.RegisterServerCallback('DP-Boombox_v2:getMovePref', function(source, cb)
+        local xPlayer = ESX.GetPlayerFromId(source)
+        if xPlayer then
+            -- 🔒 FIX: Ahora lee de la columna específica del Boombox
+            MySQL.Async.fetchScalar('SELECT boombox_move_open FROM dp_preferences WHERE citizenid = @id', {
+                ['@id'] = xPlayer.identifier
+            }, function(result)
+                cb(result == 1) 
+            end)
+        else
+            cb(false)
+        end
+    end)
+elseif Framework == "qb" then
+    QBCore.Functions.CreateCallback('DP-Boombox_v2:getMovePref', function(source, cb)
+        local Player = QBCore.Functions.GetPlayer(source)
+        if Player then
+            -- 🔒 FIX: Ahora lee de la columna específica del Boombox
+            MySQL.Async.fetchScalar('SELECT boombox_move_open FROM dp_preferences WHERE citizenid = @id', {
+                ['@id'] = Player.PlayerData.citizenid
+            }, function(result)
+                cb(result == 1)
+            end)
+        else
+            cb(false)
+        end
+    end)
+end
+
+-- 2. Evento para GUARDAR la preferencia cuando el jugador le da al switch
+RegisterNetEvent('DP-Boombox_v2:saveMovePref', function(status)
+    local src = source
+    local identifier = nil
+
+    if Framework == "ESX" then
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if xPlayer then identifier = xPlayer.identifier end
+    elseif Framework == "qb" then
+        local Player = QBCore.Functions.GetPlayer(src)
+        if Player then identifier = Player.PlayerData.citizenid end
+    end
+
+    if not identifier then return end
+
+    local valorInt = status and 1 or 0
+
+    -- 🔒 FIX: Ahora guarda y actualiza en la columna específica del Boombox
+    MySQL.Async.execute([[
+        INSERT INTO dp_preferences (citizenid, boombox_move_open) 
+        VALUES (@id, @valor) 
+        ON DUPLICATE KEY UPDATE boombox_move_open = @valor
+    ]], {
+        ['@id'] = identifier,
+        ['@valor'] = valorInt
+    })
+end)
+
+-- ============================================
+-- 💥 WIPE DE DATOS DE USUARIO (ZONA PELIGROSA)
+-- ============================================
+RegisterNetEvent('DP-Boombox_v2:wipeUserData')
+AddEventHandler('DP-Boombox_v2:wipeUserData', function()
+    local src = source
+    local identifier = nil
+
+    -- Obtenemos el identificador
+    if Framework == "ESX" then
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if xPlayer then
+            identifier = xPlayer.identifier
+        end
+    elseif Framework == "qb" then
+        local Player = QBCore.Functions.GetPlayer(src)
+        if Player then
+            identifier = Player.PlayerData.citizenid
+        end
+    end
+
+    if not identifier then
+        return
+    end
+
+    -- PASO 1: Encontrar todas las listas de las que este jugador es DUEÑO
+    MySQL.Async.fetchAll('SELECT id FROM dp_listas_repro WHERE owner = @owner', {
+        ['@owner'] = identifier
+    }, function(misListas)
+
+        -- PASO 2: Si tiene listas propias, las eliminamos completamente
+        if misListas and #misListas > 0 then
+            for _, lista in ipairs(misListas) do
+                local listId = lista.id
+
+                -- Borramos los permisos/miembros de esa lista
+                MySQL.Async.execute('DELETE FROM dp_listas_jugadores WHERE playlist = @id', {
+                    ['@id'] = listId
+                })
+                -- Borramos las canciones de esa lista
+                MySQL.Async.execute('DELETE FROM dp_listas_canciones WHERE playlist = @id', {
+                    ['@id'] = listId
+                })
+                -- Borramos la lista en sí
+                MySQL.Async.execute('DELETE FROM dp_listas_repro WHERE id = @id', {
+                    ['@id'] = listId
+                })
+            end
+        end
+
+        -- PASO 3: Sacar al jugador de cualquier otra lista en la que sea INVITADO
+        MySQL.Async.execute('DELETE FROM dp_listas_jugadores WHERE license = @license', {
+            ['@license'] = identifier
+        }, function()
+
+            -- PASO 4: Notificar y refrescar
+            TriggerClientEvent('DP-Boombox_v2:notificar', src, 'success',
+                'Todos tus datos y listas han sido eliminados.')
+
+            -- Obligamos a su cliente a recargar las listas (que ahora estarán vacías)
+            TriggerClientEvent('DP-Boombox_v2:refreshPlaylists', src)
+
+            -- Y como extra de cortesía, avisamos a TODO EL SERVIDOR para que se les refresque 
+            -- el menú si por casualidad estaban mirando una lista que acabas de borrar.
+            TriggerClientEvent('DP-Boombox_v2:refreshPlaylists', -1)
+        end)
+    end)
+end)

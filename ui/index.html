@@ -40,15 +40,9 @@
 
             <div id="page-player" class="tab-page">
                 <div class="content-body">
-
                     <div class="now-playing-container">
                         <span class="now-playing-label">ESTADO ACTUAL</span>
                         <div class="now-playing-title" id="now-playing-title">SIN CANCIÓN</div>
-                    </div>
-
-                    <div class="input-group">
-                        <label>URL DE YOUTUBE</label>
-                        <input type="text" id="input-url" placeholder="https://youtu.be/..." required>
                     </div>
 
                     <div class="thumbnail-preview-container" id="thumbnail-preview-container">
@@ -60,6 +54,10 @@
                             style="display: none; width: 100%; height: 100%; object-fit: cover; opacity: 0.6; position: absolute; top: 0; left: 0;">
                     </div>
 
+                    <div class="input-group">
+                        <label>URL DE YOUTUBE</label>
+                        <input type="text" id="input-url" placeholder="https://youtu.be/..." required>
+                    </div>
                 </div>
             </div>
 
@@ -132,9 +130,80 @@
                 </div>
             </div>
 
-            <div id="page-settings" class="tab-page">
-                <div class="content-body">
-                    <p class="settings-placeholder-text">Ajustes del altavoz (Próximamente)...</p>
+            <div id="page-settings" class="tab-page" style="display: none;">
+                <div class="content-body settings-container">
+
+                    <div class="setting-item">
+                        <div class="setting-icon-box">
+                            <iconify-icon icon="mdi:run-fast"></iconify-icon>
+                        </div>
+                        <div class="setting-info">
+                            <span class="setting-title">Moverme con el UI abierto</span>
+                            <span class="setting-desc">Permite caminar, correr y girar la cámara sin cerrar el
+                                panel.</span>
+                        </div>
+                        <div class="setting-action">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="setting-move-ped">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-icon-box">
+                            <iconify-icon icon="mdi:drag-variant"></iconify-icon>
+                        </div>
+                        <div class="setting-info">
+                            <span class="setting-title">Mover Menú</span>
+                            <span class="setting-desc">Desbloquea el reproductor para arrastrarlo por la
+                                pantalla.</span>
+                        </div>
+                        <div class="setting-action">
+                            <button class="btn-small" id="setting-drag-ui" title="Mover UI">
+                                <iconify-icon icon="bx:move"></iconify-icon>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-icon-box">
+                            <iconify-icon icon="mdi:cog-outline"></iconify-icon>
+                        </div>
+                        <div class="setting-info">
+                            <span class="setting-title">Opción futura</span>
+                            <span class="setting-desc">Espacio reservado para una futura configuración del
+                                sistema.</span>
+                        </div>
+                        <div class="setting-action">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="setting-future-1">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="danger-zone-divider">
+                        <div class="divider-line"></div>
+                        <span class="divider-text">¡OPCIONES SIN VUELTA ATRÁS!</span>
+                        <div class="divider-line"></div>
+                    </div>
+
+                    <div class="setting-item danger-setting">
+                        <div class="setting-icon-box danger-icon">
+                            <iconify-icon icon="tabler:trash-off"></iconify-icon>
+                        </div>
+                        <div class="setting-info">
+                            <span class="setting-title danger-text">Eliminar datos de usuario</span>
+                            <span class="setting-desc">Abandonarás todas las listas de invitados y eliminarás tus listas propias (expulsando a todos). <b style="color: var(--danger);">Sin confirmación. Acción inmediata.</b></span>
+                        </div>
+                        <div class="setting-action">
+                            <button class="btn-small danger-btn" id="setting-delete-all" title="¡BORRAR TODO!">
+                                <iconify-icon icon="bx:trash"></iconify-icon>
+                            </button>
+                        </div>
+                    </div>
+
                 </div>
             </div>
 
