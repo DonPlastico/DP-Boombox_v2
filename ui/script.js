@@ -567,6 +567,12 @@ function switchToTab(targetId) {
     document.querySelector(`[data-target="${targetId}"]`).classList.add('active');
     document.getElementById(targetId).style.display = 'block';
 
+    const targetPage = document.getElementById(targetId);
+    if (targetPage) {
+        targetPage.style.display = 'flex'; // 👈 CAMBIA 'block' POR 'flex' AQUÍ
+        targetPage.classList.add('active-tab');
+    }
+
     if (tabTitles[targetId]) {
         document.getElementById('main-title').innerText = tabTitles[targetId].title;
         document.getElementById('main-subtitle').innerText = tabTitles[targetId].subtitle;

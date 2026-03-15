@@ -38,7 +38,7 @@
                 </div>
             </div>
 
-            <div id="page-player" class="tab-page">
+            <div id="page-player" class="tab-page active-tab" style="display: flex;"> ```
                 <div class="content-body">
                     <div class="now-playing-container">
                         <span class="now-playing-label">ESTADO ACTUAL</span>
@@ -130,78 +130,75 @@
                 </div>
             </div>
 
-            <div id="page-settings" class="tab-page" style="display: none;">
-                <div class="content-body settings-container">
+            <div id="page-settings" class="tab-page" style="display: none; flex-direction: column;">
 
-                    <div class="setting-item">
-                        <div class="setting-icon-box">
-                            <iconify-icon icon="mdi:run-fast"></iconify-icon>
+                <div class="content-body"
+                    style="display: flex; flex-direction: column; flex-grow: 1; height: 100%; width: 100%;">
+
+                    <div style="display: flex; flex-direction: column; gap: 5px;">
+
+                        <div class="setting-item">
+                            <div class="setting-icon-box">
+                                <iconify-icon icon="mdi:run-fast"></iconify-icon>
+                            </div>
+                            <div class="setting-info">
+                                <span class="setting-title">Moverme con el UI abierto</span>
+                                <span class="setting-desc">Permite caminar, correr y girar la cámara sin cerrar el
+                                    panel.</span>
+                            </div>
+                            <div class="setting-action">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="setting-move-ped">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
                         </div>
-                        <div class="setting-info">
-                            <span class="setting-title">Moverme con el UI abierto</span>
-                            <span class="setting-desc">Permite caminar, correr y girar la cámara sin cerrar el
-                                panel.</span>
+
+                        <div class="setting-item">
+                            <div class="setting-icon-box">
+                                <iconify-icon icon="mdi:drag-variant"></iconify-icon>
+                            </div>
+                            <div class="setting-info">
+                                <span class="setting-title">Mover Menú</span>
+                                <span class="setting-desc">Desbloquea el reproductor para arrastrarlo por la
+                                    pantalla.</span>
+                            </div>
+                            <div class="setting-action">
+                                <button class="btn-small" id="setting-drag-ui" title="Mover UI">
+                                    <iconify-icon icon="bx:move"></iconify-icon>
+                                </button>
+                            </div>
                         </div>
-                        <div class="setting-action">
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-move-ped">
-                                <span class="toggle-slider"></span>
-                            </label>
-                        </div>
+
                     </div>
 
-                    <div class="setting-item">
-                        <div class="setting-icon-box">
-                            <iconify-icon icon="mdi:drag-variant"></iconify-icon>
-                        </div>
-                        <div class="setting-info">
-                            <span class="setting-title">Mover Menú</span>
-                            <span class="setting-desc">Desbloquea el reproductor para arrastrarlo por la
-                                pantalla.</span>
-                        </div>
-                        <div class="setting-action">
-                            <button class="btn-small" id="setting-drag-ui" title="Mover UI">
-                                <iconify-icon icon="bx:move"></iconify-icon>
-                            </button>
-                        </div>
-                    </div>
 
-                    <div class="setting-item">
-                        <div class="setting-icon-box">
-                            <iconify-icon icon="mdi:cog-outline"></iconify-icon>
-                        </div>
-                        <div class="setting-info">
-                            <span class="setting-title">Opción futura</span>
-                            <span class="setting-desc">Espacio reservado para una futura configuración del
-                                sistema.</span>
-                        </div>
-                        <div class="setting-action">
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="setting-future-1">
-                                <span class="toggle-slider"></span>
-                            </label>
-                        </div>
-                    </div>
+                    <div
+                        style="margin-top: auto; display: flex; flex-direction: column; gap: 5px; padding-bottom: 20px;">
 
-                    <div class="danger-zone-divider">
-                        <div class="divider-line"></div>
-                        <span class="divider-text">¡OPCIONES SIN VUELTA ATRÁS!</span>
-                        <div class="divider-line"></div>
-                    </div>
+                        <div class="danger-zone-divider" style="margin-top: 0;">
+                            <div class="divider-line"></div>
+                            <span class="divider-text">¡OPCIONES SIN VUELTA ATRÁS!</span>
+                            <div class="divider-line"></div>
+                        </div>
 
-                    <div class="setting-item danger-setting">
-                        <div class="setting-icon-box danger-icon">
-                            <iconify-icon icon="tabler:trash-off"></iconify-icon>
+                        <div class="setting-item danger-setting">
+                            <div class="setting-icon-box danger-icon">
+                                <iconify-icon icon="tabler:trash-off"></iconify-icon>
+                            </div>
+                            <div class="setting-info">
+                                <span class="setting-title danger-text">Eliminar datos de usuario</span>
+                                <span class="setting-desc">Abandonarás todas las listas de invitados y eliminarás tus
+                                    listas propias. <b style="color: var(--danger);">Sin confirmación. Acción
+                                        inmediata.</b></span>
+                            </div>
+                            <div class="setting-action">
+                                <button class="btn-small danger-btn" id="setting-delete-all" title="¡BORRAR TODO!">
+                                    <iconify-icon icon="bx:trash"></iconify-icon>
+                                </button>
+                            </div>
                         </div>
-                        <div class="setting-info">
-                            <span class="setting-title danger-text">Eliminar datos de usuario</span>
-                            <span class="setting-desc">Abandonarás todas las listas de invitados y eliminarás tus listas propias (expulsando a todos). <b style="color: var(--danger);">Sin confirmación. Acción inmediata.</b></span>
-                        </div>
-                        <div class="setting-action">
-                            <button class="btn-small danger-btn" id="setting-delete-all" title="¡BORRAR TODO!">
-                                <iconify-icon icon="bx:trash"></iconify-icon>
-                            </button>
-                        </div>
+
                     </div>
 
                 </div>
