@@ -5,6 +5,13 @@ let currentRadioId = null;
 let currentState = "detenido";
 let currentPlayingUrl = "";
 let isDraggingProgress = false;
+let isBufferingNewSong = false;
+let bufferingTimeout;
+let isLoopEnabled = localStorage.getItem('DPBoombox_Loop') === 'true';
+let isShuffleEnabled = localStorage.getItem('DPBoombox_Shuffle') === 'true';
+let shuffleQueue = []; // Almacena el orden aleatorio matemático
+let currentShuffleIndex = -1; // Por dónde vamos en la cola aleatoria
+let isAutoChangingSong = false;
 
 // ==========================================
 // 2. RECEPCIÓN DE MENSAJES UNIFICADA (LUA -> JS)
@@ -19,6 +26,30 @@ window.addEventListener('message', function (event) {
 
         case "close":
             closeUI();
+            break;
+
+        case "ytImportResult":
+            if (data.status === "success") {
+                document.getElementById('modal-overlay').style.display = 'none';
+            } else {
+                const btn = document.getElementById('btn-confirm-yt-import');
+                if (btn) {
+                    btn.innerText = "ERROR (Lista privada o API mal)";
+                    btn.style.background = "var(--danger)";
+                }
+            }
+            break;
+
+        case "ytImportToExistingResult":
+            if (data.status === "success") {
+                document.getElementById('modal-overlay').style.display = 'none';
+            } else {
+                const btn = document.getElementById('btn-confirm-yt-import-existing');
+                if (btn) {
+                    btn.innerText = "ERROR (Lista privada o vacía)";
+                    btn.style.background = "var(--danger)";
+                }
+            }
             break;
 
         case "updateTime":
@@ -40,6 +71,24 @@ window.addEventListener('message', function (event) {
         case "openDeleteModalData":
             renderDeleteModal(data.data);
             break;
+
+        case "loadPlaylistSongs":
+            renderSongsList(data.songs, data.playlistName);
+            break;
+
+        case "requestSongsRefresh":
+            if (currentSelectedPlaylistId === data.playlistId) {
+                fetchToLua('getPlaylistSongs', { playlistId: data.playlistId });
+            }
+            break;
+
+        case "addSongResult":
+            handleAddSongResult(data.status);
+            break;
+
+        case "songEnded":
+            playNextSong();
+            break;
     }
 });
 
@@ -58,6 +107,7 @@ function closeUI() {
     // Cerramos cualquier modal o dropdown abierto al cerrar la UI
     document.getElementById('modal-overlay').style.display = 'none';
     document.getElementById('dropdown-add-playlist').style.display = 'none';
+    document.getElementById('dropdown-add-song').style.display = 'none';
 
     document.getElementById('app').style.display = 'none';
     fetchToLua('closeUI');
@@ -100,8 +150,12 @@ function openPlayer(data) {
         titleBox.style.color = 'var(--primary-color)';
     }
 
+    // Aplicar diseño de botones al abrir según el LocalStorage
+    document.getElementById('btn-toggle-loop').classList.toggle('active-state', isLoopEnabled);
+    document.getElementById('btn-toggle-shuffle').classList.toggle('active-state', isShuffleEnabled);
+
     updatePlayButton();
-    
+
     // 💾 LEER DE MEMORIA LOCAL (O usar la de altavoz por defecto si es la primera vez)
     const savedTab = localStorage.getItem('DPBoombox_LastTab') || 'page-player';
     switchToTab(savedTab);
@@ -113,32 +167,69 @@ function openPlayer(data) {
 }
 
 function updatePlayButton() {
-    // Aseguramos que solo busque DENTRO del botón circular de la barra multimedia
     const btn = document.querySelector('.media-center #btn-play-action');
-
-    // Si por algún motivo el botón no existe en el DOM, no hacemos nada y evitamos el error
     if (!btn) return;
 
     const iconElement = btn.querySelector('iconify-icon');
-
-    // Si no encuentra el icono dentro, tampoco hacemos nada
     if (!iconElement) return;
 
-    // Cambiamos el icono según el estado
+    // Cambiamos el icono según el estado global
     if (currentState === "reproduciendo") {
         iconElement.setAttribute('icon', 'mdi:pause-circle');
     } else {
         iconElement.setAttribute('icon', 'mdi:play-circle');
     }
 
-    // Bloqueamos el botón si el input de URL está vacío
     const urlInput = document.getElementById('input-url');
     if (urlInput) {
         btn.disabled = (urlInput.value.trim() === "");
     }
+
+    // 🚨 LLAMADA A LA MAGIA: Sincronizar la lista de abajo
+    syncPlaylistIcons();
+}
+
+// Busca qué canción está sonando y enciende su icono en la lista
+function syncPlaylistIcons() {
+    const overlays = document.querySelectorAll('.pl-play-overlay');
+
+    overlays.forEach(overlay => {
+        const songUrl = overlay.getAttribute('data-url');
+        const icon = overlay.querySelector('iconify-icon');
+        const itemDiv = overlay.closest('.playlist-item');
+
+        if (songUrl === currentPlayingUrl) {
+            // Es la canción actual: la marcamos como activa visualmente
+            overlay.classList.add('active');
+            itemDiv.classList.add('playing-active');
+
+            if (currentState === "reproduciendo") {
+                icon.setAttribute('icon', 'mdi:pause');
+            } else {
+                icon.setAttribute('icon', 'mdi:play');
+            }
+        } else {
+            // No es la canción actual: la apagamos
+            overlay.classList.remove('active');
+            itemDiv.classList.remove('playing-active');
+            icon.setAttribute('icon', 'mdi:play');
+        }
+    });
 }
 
 function updateProgressBar(data) {
+    // 🚨 INTELIGENCIA ANTI-BUGS:
+    // Si estamos esperando una nueva canción, miramos si el tiempo de Lua es muy bajo (menos de 1.5s).
+    // Si es así, significa que la nueva canción YA EMPEZÓ y quitamos el bloqueo al instante.
+    if (isBufferingNewSong) {
+        if (data.currentTime < 1.5 && data.duration > 0) {
+            isBufferingNewSong = false;
+            clearTimeout(bufferingTimeout); // Cancelamos el seguro
+        } else {
+            return; // Sigue siendo la canción vieja muriendo, ignoramos sus tiempos.
+        }
+    }
+
     const progressInput = document.getElementById('input-progress');
     progressInput.max = data.duration;
     progressInput.value = data.currentTime;
@@ -182,8 +273,11 @@ document.getElementById('input-url').addEventListener('input', e => {
     updateThumbnail(currentInputValue);
 
     if (currentInputValue !== currentPlayingUrl) {
-        // Si es una URL nueva, preparamos el icono de Play
-        iconElement.setAttribute('icon', 'mdi:play-circle');
+        // Si es una URL nueva, preparamos el icono de Play,
+        // EXCEPTO si el script lo está cambiando automáticamente
+        if (!isAutoChangingSong) {
+            iconElement.setAttribute('icon', 'mdi:play-circle');
+        }
     } else {
         // Si vuelve a la URL actual, restauramos su estado
         updatePlayButton();
@@ -305,47 +399,104 @@ document.addEventListener('mouseup', (e) => {
 });
 
 document.getElementById('btn-play-action').addEventListener('click', async function () {
-    const url = document.getElementById('input-url').value;
+    const url = document.getElementById('input-url').value.trim();
     if (!url) return;
 
     let action = "play";
+    let isNewSong = false;
+
     if (url === currentPlayingUrl) {
         action = (currentState === "reproduciendo") ? "pause" : "resume";
+    } else {
+        isNewSong = true;
     }
+
+    // 1. SI ES PAUSAR O REANUDAR (Es instantáneo y no carga nada nuevo)
+    if (action !== "play") {
+        currentState = (action === "pause") ? "pausado" : "reproduciendo";
+        updatePlayButton();
+        fetchToLua('playerAction', {
+            id: currentRadioId,
+            url: url,
+            volume: document.getElementById('input-volume').value,
+            title: document.getElementById('now-playing-title').innerText,
+            action: action
+        });
+        return; // Salimos de la función para no ejecutar el código de abajo
+    }
+
+    // 2. SI ES UNA CANCIÓN NUEVA (PLAY)
+    if (isNewSong) {
+        isBufferingNewSong = true;
+        const progressInput = document.getElementById('input-progress');
+        progressInput.value = 0;
+        document.getElementById('current-time').innerText = "00:00";
+        document.getElementById('total-time').innerText = "00:00";
+
+        clearTimeout(bufferingTimeout);
+        bufferingTimeout = setTimeout(() => { isBufferingNewSong = false; }, 4000);
+    }
+
+    // 🚨 MAGIA ANTI-BUGS: ACTUALIZAMOS EL ESTADO DE INMEDIATO (SIN ESPERAR A INTERNET)
+    currentPlayingUrl = url;
+    currentState = "reproduciendo";
+    updatePlayButton(); // Esto pone el icono en Pause y pinta la lista de verde al milisegundo
 
     let fetchedTitle = document.getElementById('now-playing-title').innerText;
 
-    if (action === "play") {
+    // Comprobamos si el título ya es uno real (Si viene de una lista, ya lo sabemos)
+    let isKnownTitle = (fetchedTitle !== "CARGANDO..." && fetchedTitle !== "SIN CANCIÓN" && fetchedTitle !== "");
+
+    if (!isKnownTitle) {
         document.getElementById('now-playing-title').innerText = "CARGANDO...";
         document.getElementById('now-playing-title').style.color = 'var(--primary-color)';
+    } else {
+        document.getElementById('now-playing-title').style.color = 'var(--success)';
+    }
+
+    // Mandamos a reproducir a FiveM inmediatamente para que suene ya
+    fetchToLua('playerAction', {
+        id: currentRadioId,
+        url: url,
+        volume: document.getElementById('input-volume').value,
+        title: isKnownTitle ? fetchedTitle : "Cargando...",
+        action: action
+    });
+
+    // 3. SOLO buscamos en internet si es un enlace manual pegado a mano en el panel
+    if (!isKnownTitle) {
         try {
             const res = await fetch(`https://noembed.com/embed?dataType=json&url=${encodeURIComponent(url)}`);
             const data = await res.json();
-            fetchedTitle = data.title || "URL Personalizada";
-        } catch { fetchedTitle = "URL Personalizada"; }
 
-        document.getElementById('now-playing-title').innerText = fetchedTitle;
-        document.getElementById('now-playing-title').style.color = 'var(--success)';
-        currentPlayingUrl = url;
-        currentState = "reproduciendo";
-    } else {
-        currentState = (action === "pause") ? "pausado" : "reproduciendo";
+            // Si cuando llega la respuesta sigues en la misma canción, actualizamos el título
+            if (currentPlayingUrl === url) {
+                fetchedTitle = data.title || "URL Personalizada";
+                document.getElementById('now-playing-title').innerText = fetchedTitle;
+                document.getElementById('now-playing-title').style.color = 'var(--success)';
+
+                // Actualizamos el servidor silenciosamente con el nombre real
+                fetchToLua('playerAction', {
+                    id: currentRadioId, url: url, volume: document.getElementById('input-volume').value,
+                    title: fetchedTitle, action: "play"
+                });
+            }
+        } catch {
+            if (currentPlayingUrl === url) {
+                document.getElementById('now-playing-title').innerText = "URL Personalizada";
+                document.getElementById('now-playing-title').style.color = 'var(--success)';
+            }
+        }
     }
-
-    updatePlayButton();
-    fetchToLua('playerAction', {
-        id: currentRadioId, url: url, volume: document.getElementById('input-volume').value,
-        title: fetchedTitle, action: action
-    });
 });
 
 // ==========================================
 // 5. SISTEMA DE TABS (PESTAÑAS)
 // ==========================================
 const tabTitles = {
-    'page-player': { title: 'Altavoz', subtitle: 'Acciones e interacciones rápidas' },
-    'page-saved-songs': { title: 'Tu biblioteca', subtitle: 'Gestiona tu música favorita' },
-    'page-settings': { title: 'Ajustes', subtitle: 'Configuración avanzada' }
+    'page-player': { title: 'Altavoz', subtitle: 'Escucha una canción en cualquier momento' },
+    'page-saved-songs': { title: 'Listas de reproducciones', subtitle: 'Gestiona tus playlists a tu gusto' },
+    'page-settings': { title: 'Ajustes', subtitle: 'Configuración avanzada el altavoz' }
 };
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -422,6 +573,45 @@ document.addEventListener('click', e => {
 
 // Variable global para saber qué lista tenemos abierta
 let currentSelectedPlaylistId = null;
+let currentPlaylistSongs = [];
+
+// Generador dinámico de Mosaicos para las Playlists
+function generatePlaylistCover(urls) {
+    // 🚨 SI NO HAY CANCIONES, DEVOLVEMOS EL ICONO
+    if (!urls || urls.length === 0) {
+        return `<div class="pl-cover pl-cover-empty"><iconify-icon icon="mdi:music-off"></iconify-icon></div>`;
+    }
+
+    // Convertimos las URLs en enlaces de miniaturas de YouTube
+    const thumbs = urls.map(url => {
+        const id = extractYouTubeID(url);
+        return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
+    }).filter(src => src !== '');
+
+    const count = Math.min(thumbs.length, 5);
+
+    // 🚨 SI HAY CANCIONES PERO ERAN ENLACES INVÁLIDOS, DEVOLVEMOS EL ICONO
+    if (count === 0) {
+        return `<div class="pl-cover pl-cover-empty"><iconify-icon icon="mdi:music-off"></iconify-icon></div>`;
+    }
+
+    let html = `<div class="pl-cover pl-cover-grid grid-${count}">`;
+
+    if (count === 5) {
+        // Si son 5, ponemos 4 de fondo y la 5ª en el centro flotando
+        for (let i = 0; i < 4; i++) {
+            html += `<div class="pl-thumb" style="background-image: url('${thumbs[i]}');"></div>`;
+        }
+        html += `<div class="pl-thumb-center" style="background-image: url('${thumbs[4]}');"></div>`;
+    } else {
+        // Para 1, 2, 3 o 4, simplemente las pintamos normales
+        for (let i = 0; i < count; i++) {
+            html += `<div class="pl-thumb" style="background-image: url('${thumbs[i]}');"></div>`;
+        }
+    }
+    html += `</div>`;
+    return html;
+}
 
 // RENDERIZAR PLAYLISTS AL RECIBIRLAS DE LUA
 function renderPlaylists(listas) {
@@ -431,7 +621,7 @@ function renderPlaylists(listas) {
     if (!listas || listas.length === 0) {
         container.innerHTML = `
             <div class="empty-state">
-                <iconify-icon icon="solar:playlist-minimalistic-broken"></iconify-icon>
+                <iconify-icon icon="picon:playlist"></iconify-icon>
                 <p>No tienes listas. ¡Crea una o importa un código!</p>
             </div>`;
         return;
@@ -445,7 +635,7 @@ function renderPlaylists(listas) {
         div.className = `playlist-item ${isSelected ? 'selected' : ''}`;
 
         div.innerHTML = `
-            <div class="pl-cover"></div>
+            ${generatePlaylistCover(pl.thumbnails)}
             <div class="pl-info">
                 <span class="pl-title">${pl.name}</span>
                 <span class="pl-role">${isOwner ? 'Propietario' : 'Invitado'}</span>
@@ -471,12 +661,38 @@ function renderPlaylists(listas) {
 }
 
 // ==========================================
-// NUEVO: LÓGICA DE CANCIONES Y SELECCIÓN
+// LÓGICA DE CANCIONES Y SELECCIÓN (CON DESELECCIÓN)
 // ==========================================
 function selectPlaylist(id, name) {
+    // Si hacemos clic en la misma lista que ya estaba seleccionada, la deseleccionamos
+    if (currentSelectedPlaylistId === id) {
+        currentSelectedPlaylistId = null;
+
+        // 1. Quitamos la selección visual (quitando la clase y refrescando)
+        document.querySelectorAll('.playlist-item').forEach(item => item.classList.remove('selected'));
+        fetchToLua('getPlaylists');
+
+        // 2. Reseteamos el título de la sección inferior
+        document.getElementById('songs-section-title').innerText = "SELECCIONA UNA LISTA";
+
+        // 3. Ocultamos el botón "+"
+        document.getElementById('btn-add-song').style.display = 'none';
+        document.getElementById('dropdown-add-song').style.display = 'none';
+
+        // 4. Devolvemos el contenedor a su estado de "caja vacía" original
+        document.getElementById('songs-list-content').innerHTML = `
+            <div class="empty-state">
+                <iconify-icon icon="mdi:playlist-music-outline"></iconify-icon>
+                <p>Haz clic en una lista de arriba para ver sus canciones.</p>
+            </div>
+        `;
+        return; // Salimos de la función aquí para no ejecutar la carga de canciones
+    }
+
+    // --- SI ES UNA LISTA NUEVA, HACEMOS LA CARGA NORMAL ---
     currentSelectedPlaylistId = id;
 
-    // 1. Efecto visual: Marcamos la lista seleccionada en verde
+    // 1. Efecto visual: Marcamos la lista seleccionada
     document.querySelectorAll('.playlist-item').forEach(item => item.classList.remove('selected'));
     // Refrescamos las listas para que se aplique el estilo a la correcta
     fetchToLua('getPlaylists');
@@ -492,6 +708,9 @@ function selectPlaylist(id, name) {
 }
 
 function renderSongsList(songs, playlistName) {
+    // GUARDAMOS LAS CANCIONES EN MEMORIA PARA VERIFICAR DUPLICADOS LUEGO
+    currentPlaylistSongs = songs;
+
     const container = document.getElementById('songs-list-content');
     const title = document.getElementById('songs-section-title');
 
@@ -501,9 +720,11 @@ function renderSongsList(songs, playlistName) {
     if (songs.length === 0) {
         container.innerHTML = `
             <div class="empty-state">
-                <iconify-icon icon="mdi:playlist-music-outline"></iconify-icon>
-                <p>Esta lista no tiene canciones.</p>
-                <p style="color: var(--primary-color);">Dale al botón + de arriba para añadir</p>
+                <iconify-icon icon="solar:music-notes-broken" style="font-size: 40px; opacity: 0.5; margin-bottom: 5px;"></iconify-icon>
+                <p style="font-weight: 700; letter-spacing: 1px;">LISTA VACÍA</p>
+                <p style="color: var(--text-muted); font-size: 10px; max-width: 80%; line-height: 1.6;">
+                    Aquí saldrán las canciones de esta lista una vez las metas dándole al botón <b style="color: var(--primary-color); font-size: 12px; margin-left: 5px; margin-right: 5px;">+</b> de arriba.
+                </p>
             </div>`;
         return;
     }
@@ -511,23 +732,65 @@ function renderSongsList(songs, playlistName) {
     // Pintamos las canciones igual que las listas para que mantenga el diseño
     songs.forEach(song => {
         const div = document.createElement('div');
-        div.className = 'playlist-item'; // Reutilizamos el estilo de tu CSS
+        div.className = 'playlist-item';
+
+        const videoId = extractYouTubeID(song.url);
+        const thumbUrl = videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : '';
+
+        // Comprobamos el estado actual para dibujarlo correctamente al abrir la lista
+        const isPlayingThis = (currentPlayingUrl === song.url && currentState === "reproduciendo");
+        const isPausedThis = (currentPlayingUrl === song.url && currentState === "pausado");
+
+        let iconType = isPlayingThis ? "mdi:pause" : "mdi:play";
+        let overlayClass = (isPlayingThis || isPausedThis) ? "pl-play-overlay active" : "pl-play-overlay";
+
+        // El HTML de la portada ahora incluye nuestro botón oculto
+        const coverHtml = `
+            <div class="pl-cover" style="background-image: url('${thumbUrl}'); background-size: cover; background-position: center;">
+                <div class="${overlayClass}" data-url="${song.url}" onclick="event.stopPropagation(); toggleSongPlay('${song.url}', '${song.label.replace(/'/g, "\\'")}')">
+                    <iconify-icon icon="${iconType}"></iconify-icon>
+                </div>
+            </div>`;
+
         div.innerHTML = `
+            ${coverHtml}
             <div class="pl-info">
-                <span class="pl-title">${song.label}</span>
+                <span class="pl-title" title="${song.label}">${song.label}</span>
                 <span class="pl-role">${song.author || 'Sin autor'}</span>
             </div>
             <div class="pl-actions">
-                <button class="btn-icon" title="Reproducir" onclick="playSong('${song.url}')">
-                    <iconify-icon icon="mdi:play"></iconify-icon>
-                </button>
-                <button class="btn-icon delete" title="Eliminar" onclick="deleteSongFromList(${song.id}, ${currentSelectedPlaylistId})">
+                <button class="btn-icon delete" title="Eliminar" onclick="event.stopPropagation(); deleteSongFromList(${song.id}, ${currentSelectedPlaylistId})">
                     <iconify-icon icon="mdi:trash-can"></iconify-icon>
                 </button>
             </div>
         `;
         container.appendChild(div);
     });
+}
+
+// ==========================================
+// 🚨 EL "MANDO A DISTANCIA" DEL REPRODUCTOR GLOBAL 🚨
+// ==========================================
+function toggleSongPlay(url, title) {
+    const urlInput = document.getElementById('input-url');
+
+    // Si clicamos en una canción DIFERENTE a la que está sonando
+    if (currentPlayingUrl !== url) {
+        
+        isAutoChangingSong = true; // 🔒 BLOQUEAMOS EL ICONO VISUAL
+        
+        urlInput.value = url;
+        // Simulamos que el usuario ha escrito la URL para activar el botón principal
+        urlInput.dispatchEvent(new Event('input'));
+
+        // Cambiamos el título visualmente rápido para que se vea reactivo
+        document.getElementById('now-playing-title').innerText = title;
+        
+        isAutoChangingSong = false; // 🔓 DESBLOQUEAMOS
+    }
+
+    // Le decimos al botón gigante de abajo que haga su trabajo (Play o Pause)
+    document.getElementById('btn-play-action').click();
 }
 
 // ACCIÓN: CREAR PLAYLIST (Pagar texto dinámico)
@@ -538,7 +801,7 @@ document.getElementById('btn-create-playlist').addEventListener('click', () => {
     const content = `
         <div class="input-group">
             <label>NOMBRE DE LA LISTA</label>
-            <input type="text" id="input-new-playlist" placeholder="Ej: Canciones de Rol..." required>
+            <input type="text" id="input-new-playlist" placeholder="Ej: Canciones de Rol..." maxlength="50" required>
         </div>
         <div class="modal-actions">
             <button type="button" class="btn btn-solid" id="btn-confirm-playlist">CREAR LISTA</button>
@@ -696,11 +959,11 @@ function renderEditModal(data) {
         });
     }
 
-    // Si puede renombrar, mostramos el input; si no, lo ocultamos guardando el valor.
+    // Si puede renombrar, mostramos el input con límite de 50; si no, lo ocultamos guardando el valor.
     const renameHtml = canRename ? `
         <div class="input-group" style="text-align: left;">
             <label>RENOMBRAR LA LISTA</label>
-            <input type="text" id="input-edit-name" value="${playlist.name}" required>
+            <input type="text" id="input-edit-name" value="${playlist.name}" maxlength="50" required>
         </div>
         <hr style="border-color: var(--border-color); margin: 5px 0; opacity: 0.5;">
     ` : `<input type="hidden" id="input-edit-name" value="${playlist.name}">`;
@@ -990,4 +1253,337 @@ function updateThumbnail(url) {
         imgEl.style.display = 'none';
         emptyEl.style.display = 'flex';
     }
+}
+
+// ==========================================
+// ACCIONES: DESPLEGABLE DE AÑADIR CANCIONES
+// ==========================================
+const dropdownAddSong = document.getElementById('dropdown-add-song');
+
+// 1. Abrir/Cerrar el desplegable al darle al "+"
+document.getElementById('btn-add-song').addEventListener('click', e => {
+    e.stopPropagation();
+    dropdownAddSong.style.display = dropdownAddSong.style.display === 'flex' ? 'none' : 'flex';
+});
+
+// Cerrar si clicamos fuera
+document.addEventListener('click', e => {
+    if (dropdownAddSong.style.display === 'flex' && !dropdownAddSong.contains(e.target)) {
+        dropdownAddSong.style.display = 'none';
+    }
+});
+
+// 2. OPCIÓN A: Añadir UNA sola canción
+document.getElementById('btn-add-single-song').addEventListener('click', () => {
+    dropdownAddSong.style.display = 'none';
+
+    let currentPlaylistName = "LA LISTA";
+    const selectedItem = document.querySelector('.playlist-item.selected .pl-title');
+    if (selectedItem) currentPlaylistName = selectedItem.innerText.toUpperCase();
+
+    const content = `
+        <div class="input-group" style="text-align: left;">
+            <label>YOUTUBE URL</label>
+            <input type="text" id="input-new-song-url" placeholder="Ejemplo: https://www.youtube.com/watch?v=Z9MF6zxNCag" required>
+            <p id="error-msg-add-song" style="color: var(--danger); font-size: 10px; font-weight: 600; margin-top: 6px; display: none;">
+                <iconify-icon icon="mdi:alert-circle" style="vertical-align: middle; font-size: 12px;"></iconify-icon> 
+                Esta canción ya existe en esta lista de reproducción.
+            </p>
+        </div>
+        <div class="modal-actions" style="margin-top: 15px;">
+            <button type="button" class="btn btn-solid" id="btn-confirm-add-song">AGREGAR CANCIÓN A "${currentPlaylistName}"</button>
+        </div>
+    `;
+
+    showDynamicModal('mdi:music-note-plus', 'AÑADIR CANCIÓN', 'Pega el enlace del vídeo de YouTube', content);
+    setTimeout(() => document.getElementById('input-new-song-url').focus(), 100);
+
+    document.getElementById('btn-confirm-add-song').addEventListener('click', async () => {
+        const urlInput = document.getElementById('input-new-song-url');
+        const rawUrl = urlInput.value.trim();
+        const errorMsg = document.getElementById('error-msg-add-song');
+        const videoId = extractYouTubeID(rawUrl);
+
+        urlInput.style.borderColor = 'var(--border-color)';
+        errorMsg.style.display = 'none';
+
+        if (rawUrl === "" || !videoId) {
+            urlInput.style.borderColor = 'var(--danger)';
+            setTimeout(() => urlInput.style.borderColor = 'var(--border-color)', 1000);
+            return;
+        }
+
+        // 🚨 MAGIA: Limpiamos la URL para dejar solo la ID del vídeo. 
+        // Así, venga de donde venga, la base de datos siempre verá la misma URL.
+        const cleanUrl = "https://www.youtube.com/watch?v=" + videoId;
+
+        const btn = document.getElementById('btn-confirm-add-song');
+        btn.innerText = "VERIFICANDO EN BASE DE DATOS...";
+        btn.style.opacity = "0.7";
+        btn.style.pointerEvents = "none";
+
+        let songTitle = "Canción Desconocida";
+        let songAuthor = "Autor Desconocido";
+
+        try {
+            const res = await fetch(`https://noembed.com/embed?dataType=json&url=${encodeURIComponent(cleanUrl)}`);
+            const data = await res.json();
+            if (data.title) songTitle = data.title;
+            if (data.author_name) songAuthor = data.author_name;
+        } catch (e) { }
+
+        // Enviamos la URL limpia a Lua
+        fetchToLua('addSongToPlaylist', {
+            playlistId: currentSelectedPlaylistId,
+            url: cleanUrl,
+            title: songTitle,
+            author: songAuthor
+        });
+    });
+});
+
+// 3. OPCIÓN B: Importar lista de YT a la lista actual
+document.getElementById('btn-import-yt-to-list').addEventListener('click', () => {
+    dropdownAddSong.style.display = 'none';
+
+    let currentPlaylistName = "LA LISTA";
+    const selectedItem = document.querySelector('.playlist-item.selected .pl-title');
+    if (selectedItem) currentPlaylistName = selectedItem.innerText.toUpperCase();
+
+    const content = `
+        <div class="input-group" style="text-align: left;">
+            <label>URL DE LA LISTA DE YOUTUBE</label>
+            <input type="text" id="input-yt-to-list-url" placeholder="Ejemplo: https://youtube.com/playlist?list=PLhDolX..." required>
+        </div>
+        <div class="modal-actions" style="margin-top: 15px;">
+            <button type="button" class="btn btn-solid" id="btn-confirm-yt-import-existing">INYECTAR CANCIONES A "${currentPlaylistName}"</button>
+        </div>
+    `;
+
+    showDynamicModal('logos:youtube-icon', 'IMPORTAR MULTITUD', 'Añade un máximo de 50 canciones de golpe a tu lista', content);
+    setTimeout(() => document.getElementById('input-yt-to-list-url').focus(), 100);
+
+    document.getElementById('btn-confirm-yt-import-existing').addEventListener('click', () => {
+        const input = document.getElementById('input-yt-to-list-url');
+        const url = input.value.trim();
+
+        const listRegex = /[?&]list=([^#\&\?]+)/;
+        const match = url.match(listRegex);
+
+        if (!match || !match[1]) {
+            input.style.borderColor = 'var(--danger)';
+            setTimeout(() => input.style.borderColor = 'var(--border-color)', 1000);
+            return;
+        }
+
+        const btn = document.getElementById('btn-confirm-yt-import-existing');
+        btn.innerText = "DESCARGANDO DATOS (PUEDE TARDAR)...";
+        btn.style.opacity = "0.7";
+        btn.style.pointerEvents = "none";
+
+        // IMPORTANTE: Le pasamos también la ID de la playlist que tenemos abierta en pantalla
+        fetchToLua('importYouTubeToExistingPlaylist', {
+            ytPlaylistId: match[1],
+            playlistId: currentSelectedPlaylistId
+        });
+    });
+});
+
+// Función que ejecuta lo que Lua (Base de Datos) responda
+function handleAddSongResult(status) {
+    const btn = document.getElementById('btn-confirm-add-song');
+    const urlInput = document.getElementById('input-new-song-url');
+    const errorMsg = document.getElementById('error-msg-add-song');
+
+    if (!btn) return; // Por si el modal se cerró con el fondo oscuro
+
+    if (status === "duplicate") {
+        // La Base de Datos dice que ya existe. Mostramos error rojo y restauramos botón.
+        urlInput.style.borderColor = 'var(--danger)';
+        errorMsg.style.display = 'block';
+
+        let currentPlaylistName = "LA LISTA";
+        const selectedItem = document.querySelector('.playlist-item.selected .pl-title');
+        if (selectedItem) currentPlaylistName = selectedItem.innerText.toUpperCase();
+
+        btn.innerText = `AGREGAR CANCIÓN A "${currentPlaylistName}"`;
+        btn.style.opacity = "1";
+        btn.style.pointerEvents = "auto";
+    } else if (status === "success") {
+        // La Base de Datos la guardó. Cerramos el modal.
+        document.getElementById('modal-overlay').style.display = 'none';
+    }
+}
+
+// ==========================================
+// 🔀 BOTONES EXTRA: BUCLE Y ALEATORIO
+// ==========================================
+document.getElementById('btn-toggle-loop').addEventListener('click', function () {
+    isLoopEnabled = !isLoopEnabled;
+    localStorage.setItem('DPBoombox_Loop', isLoopEnabled);
+    this.classList.toggle('active-state', isLoopEnabled);
+});
+
+document.getElementById('btn-toggle-shuffle').addEventListener('click', function () {
+    isShuffleEnabled = !isShuffleEnabled;
+    localStorage.setItem('DPBoombox_Shuffle', isShuffleEnabled);
+    this.classList.toggle('active-state', isShuffleEnabled);
+
+    // Si lo acabamos de encender, generamos la lista aleatoria instantáneamente
+    if (isShuffleEnabled) {
+        const currentIdx = currentPlaylistSongs.findIndex(song => song.url === currentPlayingUrl);
+        generateShuffleQueue(currentIdx);
+    }
+});
+
+// MOTOR MATEMÁTICO: Genera una cola aleatoria perfecta (Fisher-Yates)
+function generateShuffleQueue(currentPlayingIndex = -1) {
+    if (!currentPlaylistSongs || currentPlaylistSongs.length === 0) return;
+
+    let indices = currentPlaylistSongs.map((_, i) => i);
+
+    // Si está sonando una, la sacamos temporalmente
+    if (currentPlayingIndex !== -1) {
+        indices = indices.filter(i => i !== currentPlayingIndex);
+    }
+
+    // Barajamos el resto
+    for (let i = indices.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+
+    // Volvemos a meter la que suena en la posición 0 de la cola
+    if (currentPlayingIndex !== -1) {
+        indices.unshift(currentPlayingIndex);
+        currentShuffleIndex = 0;
+    } else {
+        currentShuffleIndex = -1;
+    }
+    shuffleQueue = indices;
+}
+
+// ==========================================
+// CONTROLES DE ANTERIOR / SIGUIENTE (INTELIGENTES)
+// ==========================================
+document.getElementById('btn-prev-song').addEventListener('click', playPreviousSong);
+document.getElementById('btn-next-song').addEventListener('click', playNextSong);
+
+function playNextSong() {
+    // 1. Caso: Canción suelta o lista de 1 sola canción
+    if (!currentPlaylistSongs || currentPlaylistSongs.length <= 1) {
+        if (isLoopEnabled) {
+            fetchToLua('seekTime', { id: currentRadioId, time: 0 });
+            fetchToLua('playerAction', { id: currentRadioId, action: "resume" }); // Forzamos reproducir
+            currentState = "reproduciendo";
+            updatePlayButton();
+        } else {
+            currentState = "pausado";
+            updatePlayButton();
+        }
+        return;
+    }
+
+    const currentIdx = currentPlaylistSongs.findIndex(song => song.url === currentPlayingUrl);
+
+    // 2. MODO ALEATORIO (SHUFFLE)
+    if (isShuffleEnabled) {
+        // Si clickeaste una canción a mano, recalculamos la cola a partir de ella
+        if (shuffleQueue.length === 0 || shuffleQueue[currentShuffleIndex] !== currentIdx) {
+            generateShuffleQueue(currentIdx);
+        }
+
+        if (currentShuffleIndex >= shuffleQueue.length - 1) {
+            // Se acabó el ciclo de la lista
+            if (isLoopEnabled) {
+                const lastSongIdx = shuffleQueue[shuffleQueue.length - 1];
+                generateShuffleQueue(-1); // Generamos nuevo ciclo totalmente nuevo
+                // Evitar que la primera del nuevo ciclo sea la misma que la última del viejo
+                if (shuffleQueue[0] === lastSongIdx) {
+                    [shuffleQueue[0], shuffleQueue[1]] = [shuffleQueue[1], shuffleQueue[0]];
+                }
+                currentShuffleIndex = 0;
+                const nextSong = currentPlaylistSongs[shuffleQueue[currentShuffleIndex]];
+                toggleSongPlay(nextSong.url, nextSong.label.replace(/'/g, "\\'"));
+            } else {
+                currentState = "pausado";
+                updatePlayButton();
+            }
+        } else {
+            currentShuffleIndex++;
+            const nextSong = currentPlaylistSongs[shuffleQueue[currentShuffleIndex]];
+            toggleSongPlay(nextSong.url, nextSong.label.replace(/'/g, "\\'"));
+        }
+        return;
+    }
+
+    // 3. MODO NORMAL (LINEAL)
+    if (currentIdx !== -1) {
+        let nextIndex = currentIdx + 1;
+        if (nextIndex >= currentPlaylistSongs.length) {
+            if (isLoopEnabled) {
+                nextIndex = 0; // Bucle al principio
+            } else {
+                currentState = "pausado";
+                updatePlayButton();
+                return;
+            }
+        }
+        const nextSong = currentPlaylistSongs[nextIndex];
+        toggleSongPlay(nextSong.url, nextSong.label.replace(/'/g, "\\'"));
+    }
+}
+
+function playPreviousSong() {
+    const progressInput = document.getElementById('input-progress');
+    const currentTime = parseInt(progressInput.value) || 0;
+
+    // Si lleva más de 3 seg o es canción suelta, reinicia la canción actual
+    if (currentTime > 3 || !currentPlaylistSongs || currentPlaylistSongs.length <= 1) {
+        fetchToLua('seekTime', { id: currentRadioId, time: 0 });
+        return;
+    }
+
+    const currentIdx = currentPlaylistSongs.findIndex(song => song.url === currentPlayingUrl);
+
+    // MODO ALEATORIO (SHUFFLE)
+    if (isShuffleEnabled) {
+        if (shuffleQueue.length === 0 || shuffleQueue[currentShuffleIndex] !== currentIdx) {
+            generateShuffleQueue(currentIdx);
+        }
+        if (currentShuffleIndex > 0) {
+            currentShuffleIndex--;
+            const prevSong = currentPlaylistSongs[shuffleQueue[currentShuffleIndex]];
+            toggleSongPlay(prevSong.url, prevSong.label.replace(/'/g, "\\'"));
+        } else {
+            fetchToLua('seekTime', { id: currentRadioId, time: 0 }); // Tope atrás
+        }
+        return;
+    }
+
+    // MODO NORMAL (LINEAL)
+    if (currentIdx !== -1) {
+        let prevIndex = currentIdx - 1;
+        if (prevIndex < 0) {
+            if (isLoopEnabled) {
+                prevIndex = currentPlaylistSongs.length - 1; // Salto a la última
+            } else {
+                fetchToLua('seekTime', { id: currentRadioId, time: 0 }); // Tope atrás
+                return;
+            }
+        }
+        const prevSong = currentPlaylistSongs[prevIndex];
+        toggleSongPlay(prevSong.url, prevSong.label.replace(/'/g, "\\'"));
+    }
+}
+
+// ==========================================
+// 🗑️ ELIMINAR CANCIÓN DE LA LISTA
+// ==========================================
+function deleteSongFromList(songId, playlistId) {
+    // Mandamos la orden directamente al servidor de Lua
+    fetchToLua('removeSongFromPlaylist', {
+        songId: songId,
+        playlistId: playlistId
+    });
 }

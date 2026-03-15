@@ -78,12 +78,16 @@
 
                             <div class="dropdown-menu" id="dropdown-add-playlist">
                                 <button class="dropdown-item" id="btn-create-playlist">
-                                    <iconify-icon icon="mingcute:playlist-add-fill"></iconify-icon>
+                                    <iconify-icon icon="subway:add-playlist"></iconify-icon>
                                     <span>Crear nueva lista de reproducción</span>
                                 </button>
                                 <button class="dropdown-item" id="btn-import-playlist">
                                     <iconify-icon icon="fluent:arrow-import-24-filled"></iconify-icon>
                                     <span>Importar una lista de reproducción existente</span>
+                                </button>
+                                <button class="dropdown-item" id="btn-import-yt-playlist">
+                                    <iconify-icon icon="ri:import-fill"></iconify-icon>
+                                    <span>Importar lista de YouTube</span>
                                 </button>
                             </div>
                         </div>
@@ -99,11 +103,24 @@
                                 <span id="songs-section-title"
                                     style="font-size: 11px; text-transform: uppercase;">SELECCIONA UNA LISTA</span>
                             </div>
+
                             <button class="add-playlist-btn" id="btn-add-song" title="Añadir canción"
                                 style="display: none;">
                                 <iconify-icon icon="mdi:plus"></iconify-icon>
                             </button>
+
+                            <div class="dropdown-menu" id="dropdown-add-song">
+                                <button class="dropdown-item" id="btn-add-single-song">
+                                    <iconify-icon icon="mdi:music-note-plus"></iconify-icon>
+                                    <span>Añadir una canción manual (URL)</span>
+                                </button>
+                                <button class="dropdown-item" id="btn-import-yt-to-list">
+                                    <iconify-icon icon="ri:import-fill"></iconify-icon>
+                                    <span>Añadir canciones de lista YouTube</span>
+                                </button>
+                            </div>
                         </div>
+
                         <div class="library-content" id="songs-list-content">
                             <div class="empty-state">
                                 <iconify-icon icon="mdi:playlist-music-outline"></iconify-icon>
@@ -124,15 +141,24 @@
             <div class="global-progress-bar">
 
                 <div class="media-controls-bar">
-                    <div class="media-spacer"></div>
+                    <div class="media-left"
+                        style="flex: 1; display: flex; gap: 12px; align-items: center; justify-content: flex-start; padding-left: 5px;">
+                        <button id="btn-toggle-shuffle" class="simple-control-btn extra-btn" title="Aleatorio">
+                            <iconify-icon icon="mdi:shuffle"></iconify-icon>
+                        </button>
+                        <button id="btn-toggle-loop" class="simple-control-btn extra-btn" title="Bucle">
+                            <iconify-icon icon="mdi:repeat"></iconify-icon>
+                        </button>
+                    </div>
+
                     <div class="media-center">
-                        <button class="simple-control-btn" title="Anterior">
+                        <button id="btn-prev-song" class="simple-control-btn" title="Anterior">
                             <iconify-icon icon="mdi:skip-previous"></iconify-icon>
                         </button>
                         <button id="btn-play-action" class="simple-control-btn play-btn" title="Play/Pause" disabled>
                             <iconify-icon icon="mdi:play-circle"></iconify-icon>
                         </button>
-                        <button class="simple-control-btn" title="Siguiente">
+                        <button id="btn-next-song" class="simple-control-btn" title="Siguiente">
                             <iconify-icon icon="mdi:skip-next"></iconify-icon>
                         </button>
                     </div>

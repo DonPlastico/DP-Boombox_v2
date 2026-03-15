@@ -74,8 +74,8 @@ button {
     gap: 5px;
     width: 400px;
     min-height: 450px;
-    max-height: 800px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+    max-height: 900px;
+    box-shadow: 0 10px 30px rgb(0 0 0 / 80%);
     display: flex;
     flex-direction: column;
     position: relative;
@@ -336,7 +336,7 @@ button {
     padding: 10px 12px;
     border-radius: 6px;
     border: 1px solid var(--border-color);
-    margin-bottom: 10px;
+    margin-bottom: 5px;
     position: relative;
 }
 
@@ -378,11 +378,12 @@ button {
     background: rgba(255, 255, 255, 0.1);
 }
 
-#library-content {
+#library-content,
+#songs-list-content {
     display: flex;
     flex-direction: column;
     gap: 3px;
-    max-height: 350px;
+    max-height: 250px;
     overflow-y: auto;
     padding-right: 5px;
 }
@@ -436,6 +437,49 @@ button {
     margin-right: 12px;
     flex-shrink: 0;
     border: 1px solid rgba(255, 255, 255, 0.05);
+    /* 🚨 AÑADIDO PARA EL OVERLAY DEL PLAY 🚨 */
+    position: relative;
+    overflow: hidden;
+}
+
+/* ==========================================
+   OVERLAY DE REPRODUCCIÓN (PLAY/PAUSE)
+   ========================================== */
+.pl-play-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: grey;
+    font-size: 20px;
+    opacity: 0;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    z-index: 10;
+}
+
+/* Mostrar cuando pasas el ratón por encima de toda la canción */
+.playlist-item:hover .pl-play-overlay {
+    opacity: 1;
+}
+
+/* Mantener visible si ESTA es la canción que está sonando ahora mismo */
+.pl-play-overlay.active {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.85);
+    color: white;
+    /* Se pone verde si está sonando */
+}
+
+/* Efecto al pasar el ratón justo por el botón */
+.pl-play-overlay:hover {
+    color: white;
+    transform: scale(1.1);
 }
 
 .pl-info {
@@ -445,7 +489,7 @@ button {
 
 .pl-title {
     display: block;
-    color: #ffffff;
+    color: #9e9e9e;
     font-size: 12px;
     font-weight: 700;
     white-space: nowrap;
@@ -738,7 +782,40 @@ button {
     margin-bottom: 8px;
 }
 
-.media-spacer,
+/* ==========================================
+   BOTONES EXTRA (SHUFFLE Y BUCLE)
+   ========================================== */
+.extra-btn {
+    font-size: 14px !important;
+    position: relative;
+    border: 1px solid var(--border-color) !important;
+    background: rgba(0, 0, 0, 0.6) !important;
+    border-radius: 4px !important;
+    overflow: hidden !important;
+    padding: 5px !important;
+    transition: height 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), background 0.3s ease !important;
+    z-index: 300 !important;
+}
+
+.extra-btn.active-state {
+    filter: drop-shadow(0 0 4px grey) !important;
+    background: var(--primary-color) !important;
+    color: var(--bg-panel) !important;
+}
+
+/* El puntito verde estilo Spotify debajo del botón */
+.extra-btn.active-state::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 4px;
+    background-color: var(--success);
+    border-radius: 50%;
+}
+
 .media-right {
     flex: 1;
 }
@@ -760,7 +837,7 @@ button {
 .simple-control-btn {
     background: transparent;
     border: none;
-    color: var(--text-secondary);
+    color: grey;
     font-size: 24px;
     cursor: pointer;
     transition: all 0.2s ease;
@@ -770,8 +847,8 @@ button {
 }
 
 .simple-control-btn:hover {
-    color: var(--text-main);
-    transform: scale(1.1);
+    background: var(--primary-color) !important;
+    color: var(--bg-panel) !important;
 }
 
 .simple-control-btn.play-btn {
@@ -882,7 +959,7 @@ button {
 }
 
 .vertical-slider-wrapper .styled-slider {
-    width: 70px;
+    width: 95px;
     transform: rotate(-90deg);
     margin: 0;
 }
@@ -914,7 +991,7 @@ button {
    VISTA DIVIDIDA (50% LISTAS / 50% CANCIONES)
    ========================================== */
 #library-split-view {
-    max-height: 650px;
+    max-height: 800px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -936,6 +1013,21 @@ button {
 
 .playlist-item.selected {
     background: rgba(255, 255, 255, 0.3);
+}
+
+.playlist-item.selected .pl-title {
+    color: white
+}
+
+/* ==========================================
+   RESALTADO DE CANCIÓN ACTIVA
+   ========================================== */
+.playlist-item.playing-active {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.playlist-item.playing-active .pl-title {
+    color: white
 }
 
 /* ==========================================
@@ -984,7 +1076,81 @@ button {
     line-height: 1.5;
 }
 
+/* ==========================================
+   MOSAICOS DINÁMICOS DE PORTADAS
+   ========================================== */
+.pl-cover-grid {
+    display: grid;
+    gap: 1px;
+    /* La pequeña línea negra de separación */
+    padding: 0;
+    overflow: hidden;
+    position: relative;
+}
 
+/* Centrado del icono cuando la lista está vacía */
+.pl-cover-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.2);
+    /* Un gris semitransparente elegante */
+    font-size: 18px;
+    /* Tamaño ideal para que encaje en el recuadro de 35px */
+}
+
+.pl-thumb {
+    background-size: cover;
+    background-position: center;
+    width: 100%;
+    height: 100%;
+}
+
+/* 1 Imagen: 100% */
+.grid-1 {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+}
+
+/* 2 Imágenes: Divididas verticalmente (Izquierda / Derecha) */
+.grid-2 {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr;
+}
+
+/* 3 Imágenes: 2 arriba, 1 ancha abajo */
+.grid-3 {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+}
+
+.grid-3 .pl-thumb:nth-child(3) {
+    grid-column: span 2;
+}
+
+/* 4 y 5 Imágenes: Cuadrícula 2x2 */
+.grid-4,
+.grid-5 {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+}
+
+/* 5 Imágenes: La central que flota por encima */
+.pl-thumb-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 45%;
+    height: 45%;
+    background-size: cover;
+    background-position: center;
+    border: 1px solid rgba(0, 0, 0, 0.8);
+    /* Borde oscuro para resaltarla */
+    border-radius: 2px;
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+    z-index: 2;
+}
 
 
 

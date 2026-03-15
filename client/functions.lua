@@ -118,7 +118,7 @@ CreateThread(function()
                         AttachEntityToEntity(radioObjetivo, jugador, GetPedBoneIndex(jugador, 57005), 0.32, 0, -0.05,
                             0.10, 270.0, 60.0, true, true, false, true, 1, true)
                         equiparRadio(radioObjetivo)
-                        radioObjetivo = 0 
+                        radioObjetivo = 0
 
                     elseif IsControlJustPressed(0, 47) then -- 🚨 TECLA G (Control 47)
                         -- Al ser la tecla G, ya no necesitamos ningún filtro anti-escape mágico

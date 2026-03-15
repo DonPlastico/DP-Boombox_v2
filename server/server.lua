@@ -82,7 +82,7 @@ end)
 -- 📋 FUNCIONES LOCALES (DEBEN ESTAR ARRIBA)
 -- ==========================================
 
--- OBTENER LAS PLAYLISTS DEL JUGADOR
+-- OBTENER LAS PLAYLISTS DEL JUGADOR (CON HASTA 5 CANCIONES PARA EL MOSAICO)
 local function getPlaylists(identificador, cb)
     local query = [[
         SELECT p.id, p.name, p.owner, p.share_code, 
@@ -92,10 +92,55 @@ local function getPlaylists(identificador, cb)
         WHERE p.owner = @id OR j.license = @id
         GROUP BY p.id
     ]]
+
     MySQL.Async.fetchAll(query, {
         ['@id'] = identificador
-    }, function(result)
-        cb(result or {})
+    }, function(playlists)
+        -- Si no tiene listas, devolvemos vacío y terminamos
+        if not playlists or #playlists == 0 then
+            cb({})
+            return
+        end
+
+        -- Si tiene listas, preparamos una búsqueda para traer sus canciones
+        local playlistIds = {}
+        for i = 1, #playlists do
+            table.insert(playlistIds, playlists[i].id)
+        end
+
+        local idsString = table.concat(playlistIds, ",")
+        local songsQuery = string.format([[
+            SELECT lc.playlist, c.url 
+            FROM dp_listas_canciones lc 
+            JOIN dp_canciones c ON lc.song = c.id 
+            WHERE lc.playlist IN (%s) 
+            ORDER BY lc.id ASC
+        ]], idsString)
+
+        -- Buscamos las canciones y las agrupamos
+        MySQL.Async.fetchAll(songsQuery, {}, function(songs)
+            local thumbnailsByPlaylist = {}
+
+            if songs then
+                for i = 1, #songs do
+                    local pId = songs[i].playlist
+                    if not thumbnailsByPlaylist[pId] then
+                        thumbnailsByPlaylist[pId] = {}
+                    end
+                    -- Limitamos a un máximo de 5 canciones por lista para el mosaico
+                    if #thumbnailsByPlaylist[pId] < 5 then
+                        table.insert(thumbnailsByPlaylist[pId], songs[i].url)
+                    end
+                end
+            end
+
+            -- Metemos las URL dentro de los datos de cada playlist
+            for i = 1, #playlists do
+                playlists[i].thumbnails = thumbnailsByPlaylist[playlists[i].id] or {}
+            end
+
+            cb(playlists)
+        end)
     end)
 end
 
@@ -179,7 +224,9 @@ end
 RegisterServerEvent('DP-Boombox_v2:savePlaylistEdit', function(data)
     local src = source
     local playlistId = data.id
-    local newName = data.newName
+
+    -- CORTAMOS EL STRING A 50 CARACTERES POR SEGURIDAD
+    local newName = string.sub(data.newName, 1, 50)
     local perms = data.permissions
 
     local identificador = nil
@@ -324,14 +371,17 @@ RegisterServerEvent('DP-Boombox_v2:createPlaylist', function(nombreLista)
     local src = source
     local codigoUnico = GenerarCodigoCompartir()
 
+    -- CORTAMOS EL STRING A 50 CARACTERES POR SEGURIDAD
+    local nombreSeguro = string.sub(nombreLista, 1, 50)
+
     local function InsertarLista(identificador)
         MySQL.Async.insert(
             'INSERT INTO `dp_listas_repro` (`name`, `owner`, `share_code`) VALUES (@name, @owner, @code)', {
-                ['@name'] = nombreLista,
+                ['@name'] = nombreSeguro,
                 ['@owner'] = identificador,
                 ['@code'] = codigoUnico
             }, function(insertId)
-                TriggerClientEvent('DP-Boombox_v2:notificar', src, 'success', 'Lista creada: ' .. nombreLista)
+                TriggerClientEvent('DP-Boombox_v2:notificar', src, 'success', 'Lista creada: ' .. nombreSeguro)
                 TriggerClientEvent('DP-Boombox_v2:refreshPlaylists', src)
             end)
     end
@@ -528,6 +578,331 @@ RegisterServerEvent('DP-Boombox_v2:transferPlaylist', function(playlistId, newOw
                     TriggerClientEvent('DP-Boombox_v2:refreshPlaylists', src)
                 end)
             end)
+        end
+    end)
+end)
+
+-- ==========================================
+-- 🎵 AÑADIR CANCIÓN A LA LISTA
+-- ==========================================
+RegisterServerEvent('DP-Boombox_v2:addSongToPlaylist', function(data)
+    local src = source
+    local playlistId = data.playlistId
+    local url = data.url
+
+    -- Recortamos los nombres para evitar el "Data too long" de SQL (150 y 50 caracteres)
+    local title = string.sub(data.title, 1, 150)
+    local author = string.sub(data.author, 1, 50)
+
+    -- 1. Insertar la canción en la tabla general (Si ya existe la URL, actualizamos su nombre)
+    MySQL.Async.execute([[
+        INSERT INTO dp_canciones (url, name, author, maxDuration) 
+        VALUES (@url, @name, @author, 0)
+        ON DUPLICATE KEY UPDATE name = @name, author = @author
+    ]], {
+        ['@url'] = url,
+        ['@name'] = title,
+        ['@author'] = author
+    }, function()
+
+        -- 2. Obtenemos la ID interna de la canción en la base de datos
+        MySQL.Async.fetchAll('SELECT id FROM dp_canciones WHERE url = @url', {
+            ['@url'] = url
+        }, function(res)
+            if res and res[1] then
+                local songId = res[1].id
+
+                -- 3. Comprobamos si esta canción ya está en ESTA playlist
+                MySQL.Async.fetchAll('SELECT id FROM dp_listas_canciones WHERE playlist = @playlist AND song = @song',
+                    {
+                        ['@playlist'] = playlistId,
+                        ['@song'] = songId
+                    }, function(relRes)
+                        if relRes and #relRes > 0 then
+                            -- ¡LA CANCIÓN YA ESTÁ EN LA LISTA! Avisamos al menú JS para que ponga el texto en rojo
+                            TriggerClientEvent('DP-Boombox_v2:addSongResult', src, 'duplicate')
+                        else
+                            -- 4. No existe en la lista, la enlazamos
+                            MySQL.Async.execute(
+                                'INSERT INTO dp_listas_canciones (playlist, song) VALUES (@playlist, @song)', {
+                                    ['@playlist'] = playlistId,
+                                    ['@song'] = songId
+                                }, function()
+                                    TriggerClientEvent('DP-Boombox_v2:notificar', src, 'success', 'Añadida: ' .. title)
+                                    TriggerClientEvent('DP-Boombox_v2:refreshPlaylistSongs', src, playlistId)
+
+                                    -- ¡ÉXITO! Avisamos al menú JS para que cierre el modal
+                                    TriggerClientEvent('DP-Boombox_v2:addSongResult', src, 'success')
+                                end)
+                        end
+                    end)
+            end
+        end)
+    end)
+end)
+
+-- ==========================================
+-- 🌐 IMPORTAR PLAYLIST DESDE YOUTUBE (SIN DEADLOCKS)
+-- ==========================================
+RegisterServerEvent('DP-Boombox_v2:importYouTubePlaylist', function(data)
+    local src = source
+    local ytPlaylistId = data.ytPlaylistId
+    local identifier = nil
+
+    if Framework == "ESX" then
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if xPlayer then
+            identifier = xPlayer.identifier
+        end
+    elseif Framework == "qb" then
+        local Player = QBCore.Functions.GetPlayer(src)
+        if Player then
+            identifier = Player.PlayerData.citizenid
+        end
+    end
+    if not identifier then
+        return
+    end
+
+    if not Config.YouTubeAPIKey or Config.YouTubeAPIKey == "" or Config.YouTubeAPIKey ==
+        "PON_AQUI_TU_API_KEY_DE_YOUTUBE" then
+        TriggerClientEvent('DP-Boombox_v2:notificar', src, 'error', 'El servidor no ha configurado la API de YouTube.')
+        TriggerClientEvent('DP-Boombox_v2:ytImportResult', src, 'error')
+        return
+    end
+
+    local urlPlaylistInfo = "https://www.googleapis.com/youtube/v3/playlists?part=snippet&id=" .. ytPlaylistId ..
+                                "&key=" .. Config.YouTubeAPIKey
+
+    PerformHttpRequest(urlPlaylistInfo, function(errInfo, textInfo, headersInfo)
+        local nombreLista = "Importación YT (" .. string.sub(ytPlaylistId, 1, 5) .. ")"
+
+        if errInfo == 200 then
+            local resInfo = json.decode(textInfo)
+            if resInfo and resInfo.items and #resInfo.items > 0 then
+                nombreLista = string.sub(resInfo.items[1].snippet.title, 1, 50)
+            end
+        end
+
+        local apiUrl = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId=" ..
+                           ytPlaylistId .. "&key=" .. Config.YouTubeAPIKey
+
+        PerformHttpRequest(apiUrl, function(err, text, headers)
+            if err == 200 then
+                local response = json.decode(text)
+
+                if response and response.items and #response.items > 0 then
+                    -- 🚨 CREAMOS UN THREAD PARA INSERTAR UNA A UNA Y EVITAR DEADLOCKS 🚨
+                    CreateThread(function()
+                        local newPlaylistId = MySQL.Sync.insert(
+                            'INSERT INTO `dp_listas_repro` (`name`, `owner`, `share_code`) VALUES (@name, @owner, @code)',
+                            {
+                                ['@name'] = nombreLista,
+                                ['@owner'] = identifier,
+                                ['@code'] = "YT" .. math.random(10000, 99999)
+                            })
+
+                        local cancionesAgregadas = 0
+
+                        for i = 1, #response.items do
+                            local item = response.items[i].snippet
+                            local title = string.sub(item.title, 1, 150)
+                            local author = string.sub(item.videoOwnerChannelTitle or "YouTube", 1, 50)
+                            local videoId = item.resourceId.videoId
+                            local url = "https://www.youtube.com/watch?v=" .. videoId
+
+                            if title ~= "Private video" and title ~= "Deleted video" then
+                                MySQL.Sync.execute([[
+                                    INSERT INTO dp_canciones (url, name, author, maxDuration) 
+                                    VALUES (@url, @name, @author, 0)
+                                    ON DUPLICATE KEY UPDATE name = @name, author = @author
+                                ]], {
+                                    ['@url'] = url,
+                                    ['@name'] = title,
+                                    ['@author'] = author
+                                })
+
+                                local res = MySQL.Sync.fetchAll('SELECT id FROM dp_canciones WHERE url = @url', {
+                                    ['@url'] = url
+                                })
+                                if res and res[1] then
+                                    MySQL.Sync.execute([[
+                                        INSERT INTO dp_listas_canciones (playlist, song) 
+                                        SELECT @playlist, @song 
+                                        WHERE NOT EXISTS (
+                                            SELECT 1 FROM dp_listas_canciones WHERE playlist = @playlist AND song = @song
+                                        )
+                                    ]], {
+                                        ['@playlist'] = newPlaylistId,
+                                        ['@song'] = res[1].id
+                                    })
+                                end
+                                cancionesAgregadas = cancionesAgregadas + 1
+
+                                -- 🚨 DAMOS UN RESPIRO A LA BASE DE DATOS (Milisegundos) 🚨
+                                Wait(25)
+                            end
+                        end
+
+                        TriggerClientEvent('DP-Boombox_v2:notificar', src, 'success',
+                            'Importada: ' .. nombreLista .. ' (' .. cancionesAgregadas .. ' canciones)')
+                        TriggerClientEvent('DP-Boombox_v2:refreshPlaylists', src)
+                        TriggerClientEvent('DP-Boombox_v2:ytImportResult', src, 'success')
+                    end)
+                else
+                    TriggerClientEvent('DP-Boombox_v2:notificar', src, 'error',
+                        'La lista de YouTube está vacía o es privada.')
+                    TriggerClientEvent('DP-Boombox_v2:ytImportResult', src, 'error')
+                end
+            else
+                TriggerClientEvent('DP-Boombox_v2:notificar', src, 'error', 'Error al leer YouTube. Comprueba la URL.')
+                TriggerClientEvent('DP-Boombox_v2:ytImportResult', src, 'error')
+            end
+        end, 'GET', '')
+    end, 'GET', '')
+end)
+
+-- ==========================================
+-- 🌐 INYECTAR YOUTUBE PLAYLIST A UNA LISTA EXISTENTE (SIN DEADLOCKS)
+-- ==========================================
+RegisterServerEvent('DP-Boombox_v2:importYouTubeToExistingPlaylist', function(data)
+    local src = source
+    local ytPlaylistId = data.ytPlaylistId
+    local targetPlaylistId = data.playlistId
+    local identifier = nil
+
+    if Framework == "ESX" then
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if xPlayer then
+            identifier = xPlayer.identifier
+        end
+    elseif Framework == "qb" then
+        local Player = QBCore.Functions.GetPlayer(src)
+        if Player then
+            identifier = Player.PlayerData.citizenid
+        end
+    end
+    if not identifier then
+        return
+    end
+
+    if not Config.YouTubeAPIKey or Config.YouTubeAPIKey == "" or Config.YouTubeAPIKey ==
+        "PON_AQUI_TU_API_KEY_DE_YOUTUBE" then
+        TriggerClientEvent('DP-Boombox_v2:notificar', src, 'error', 'El servidor no ha configurado la API de YouTube.')
+        TriggerClientEvent('DP-Boombox_v2:ytImportToExistingResult', src, 'error')
+        return
+    end
+
+    local apiUrl = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId=" ..
+                       ytPlaylistId .. "&key=" .. Config.YouTubeAPIKey
+
+    PerformHttpRequest(apiUrl, function(err, text, headers)
+        if err == 200 then
+            local response = json.decode(text)
+
+            if response and response.items and #response.items > 0 then
+                -- 🚨 CREAMOS UN THREAD PARA INSERTAR UNA A UNA Y EVITAR DEADLOCKS 🚨
+                CreateThread(function()
+                    local cancionesAgregadas = 0
+
+                    for i = 1, #response.items do
+                        local item = response.items[i].snippet
+                        local title = string.sub(item.title, 1, 150)
+                        local author = string.sub(item.videoOwnerChannelTitle or "YouTube", 1, 50)
+                        local videoId = item.resourceId.videoId
+                        local url = "https://www.youtube.com/watch?v=" .. videoId
+
+                        if title ~= "Private video" and title ~= "Deleted video" then
+                            MySQL.Sync.execute([[
+                                INSERT INTO dp_canciones (url, name, author, maxDuration) 
+                                VALUES (@url, @name, @author, 0)
+                                ON DUPLICATE KEY UPDATE name = @name, author = @author
+                            ]], {
+                                ['@url'] = url,
+                                ['@name'] = title,
+                                ['@author'] = author
+                            })
+
+                            local res = MySQL.Sync.fetchAll('SELECT id FROM dp_canciones WHERE url = @url', {
+                                ['@url'] = url
+                            })
+                            if res and res[1] then
+                                MySQL.Sync.execute([[
+                                    INSERT INTO dp_listas_canciones (playlist, song) 
+                                    SELECT @playlist, @song 
+                                    WHERE NOT EXISTS (
+                                        SELECT 1 FROM dp_listas_canciones WHERE playlist = @playlist AND song = @song
+                                    )
+                                ]], {
+                                    ['@playlist'] = targetPlaylistId,
+                                    ['@song'] = res[1].id
+                                })
+                            end
+                            cancionesAgregadas = cancionesAgregadas + 1
+
+                            -- 🚨 DAMOS UN RESPIRO A LA BASE DE DATOS (Milisegundos) 🚨
+                            Wait(25)
+                        end
+                    end
+
+                    TriggerClientEvent('DP-Boombox_v2:notificar', src, 'success',
+                        'Se han inyectado ' .. cancionesAgregadas .. ' canciones a tu lista.')
+                    TriggerClientEvent('DP-Boombox_v2:refreshPlaylists', src)
+                    TriggerClientEvent('DP-Boombox_v2:refreshPlaylistSongs', src, targetPlaylistId)
+                    TriggerClientEvent('DP-Boombox_v2:ytImportToExistingResult', src, 'success')
+                end)
+            else
+                TriggerClientEvent('DP-Boombox_v2:notificar', src, 'error',
+                    'La lista de YouTube está vacía o es privada.')
+                TriggerClientEvent('DP-Boombox_v2:ytImportToExistingResult', src, 'error')
+            end
+        else
+            TriggerClientEvent('DP-Boombox_v2:notificar', src, 'error', 'Error al leer YouTube. Comprueba la URL.')
+            TriggerClientEvent('DP-Boombox_v2:ytImportToExistingResult', src, 'error')
+        end
+    end, 'GET', '')
+end)
+
+-- ==========================================
+-- 🗑️ ELIMINAR CANCIÓN DE UNA LISTA
+-- ==========================================
+RegisterServerEvent('DP-Boombox_v2:removeSongFromPlaylist', function(data)
+    local src = source
+    local songId = data.songId
+    local playlistId = data.playlistId
+    local identifier = nil
+
+    -- Obtenemos el identificador del jugador (Seguridad)
+    if Framework == "ESX" then
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if xPlayer then
+            identifier = xPlayer.identifier
+        end
+    elseif Framework == "qb" then
+        local Player = QBCore.Functions.GetPlayer(src)
+        if Player then
+            identifier = Player.PlayerData.citizenid
+        end
+    end
+    if not identifier then
+        return
+    end
+
+    -- Borramos la relación de esa canción con esa lista específica
+    MySQL.Async.execute('DELETE FROM dp_listas_canciones WHERE playlist = @playlist AND song = @song', {
+        ['@playlist'] = playlistId,
+        ['@song'] = songId
+    }, function(rowsChanged)
+        if rowsChanged > 0 then
+            TriggerClientEvent('DP-Boombox_v2:notificar', src, 'success', 'Canción eliminada de la lista.')
+
+            -- 1. Refrescamos las canciones que estás viendo abajo
+            TriggerClientEvent('DP-Boombox_v2:refreshPlaylistSongs', src, playlistId)
+
+            -- 2. Refrescamos tus listas de arriba (Por si el mosaico de imágenes ha cambiado)
+            TriggerClientEvent('DP-Boombox_v2:refreshPlaylists', src)
+        else
+            TriggerClientEvent('DP-Boombox_v2:notificar', src, 'error', 'No se pudo eliminar la canción.')
         end
     end)
 end)

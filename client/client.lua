@@ -43,6 +43,7 @@ RegisterNUICallback('playerAction', function(data, cb)
     uiAbierta = true
     local idMusica = 'id_' .. data.id
     local distanciaFija = Config.Radios['speaker'].rango
+    local myServerId = GetPlayerServerId(PlayerId()) -- 🚨 ARREGLO DE IDENTIDAD ÚNICA
 
     if data.action == "play" then
         if data.url and data.url ~= "" then
@@ -56,7 +57,7 @@ RegisterNUICallback('playerAction', function(data, cb)
                 estado = "reproduciendo",
                 link = data.url,
                 title = data.title,
-                currentId = 'id_' .. PlayerId()
+                currentId = myServerId -- 🚨 AHORA ES ÚNICO PARA CADA JUGADOR EN EL SERVIDOR
             }
             TriggerServerEvent('DP-Boombox_v2:syncActive', radiosActivas)
         end
@@ -178,7 +179,6 @@ RegisterNetEvent('DP-Boombox_v2:soundStatus', function(tipo, idMusica, datos)
             if xSound:soundExists(idMusica) then
                 xSound:Destroy(idMusica)
             end
-            -- AÑADIMOS EL EVENTO DE SALTO DE TIEMPO AQUÍ
         elseif tipo == "seek" then
             if xSound:soundExists(idMusica) then
                 xSound:setTimeStamp(idMusica, datos.time)
@@ -310,6 +310,134 @@ end)
 RegisterNUICallback('transferPlaylist', function(data, cb)
     TriggerServerEvent('DP-Boombox_v2:transferPlaylist', data.id, data.newOwner)
     cb('ok')
+end)
+
+RegisterNUICallback('addSongToPlaylist', function(data, cb)
+    TriggerServerEvent('DP-Boombox_v2:addSongToPlaylist', data)
+    cb('ok')
+end)
+
+RegisterNetEvent('DP-Boombox_v2:refreshPlaylistSongs', function(playlistId)
+    if uiAbierta then
+        SendNUIMessage({
+            action = "requestSongsRefresh",
+            playlistId = playlistId
+        })
+    end
+end)
+
+RegisterNetEvent('DP-Boombox_v2:addSongResult', function(status)
+    if uiAbierta then
+        SendNUIMessage({
+            action = "addSongResult",
+            status = status
+        })
+    end
+end)
+
+RegisterNUICallback('importYouTubePlaylist', function(data, cb)
+    TriggerServerEvent('DP-Boombox_v2:importYouTubePlaylist', data)
+    cb('ok')
+end)
+
+RegisterNetEvent('DP-Boombox_v2:ytImportResult', function(status)
+    if uiAbierta then
+        SendNUIMessage({
+            action = "ytImportResult",
+            status = status
+        })
+    end
+end)
+
+RegisterNUICallback('importYouTubeToExistingPlaylist', function(data, cb)
+    TriggerServerEvent('DP-Boombox_v2:importYouTubeToExistingPlaylist', data)
+    cb('ok')
+end)
+
+RegisterNetEvent('DP-Boombox_v2:ytImportToExistingResult', function(status)
+    if uiAbierta then
+        SendNUIMessage({
+            action = "ytImportToExistingResult",
+            status = status
+        })
+    end
+end)
+
+RegisterNUICallback('removeSongFromPlaylist', function(data, cb)
+    TriggerServerEvent('DP-Boombox_v2:removeSongFromPlaylist', data)
+    cb('ok')
+end)
+
+-- ============================================
+-- 🚨 AUTO-REPRODUCCIÓN Y CONTROL DE TIEMPO 🚨
+-- ============================================
+CreateThread(function()
+    while true do
+        Wait(1000) -- Revisamos el tiempo cada segundo
+
+        local myServerId = GetPlayerServerId(PlayerId())
+
+        for radioId, radioInfo in pairs(radiosActivas) do
+            local idMusica = 'id_' .. radioId
+
+            -- Si la radio existe en el mundo y está sonando ahora mismo
+            if xSound:soundExists(idMusica) and xSound:isPlaying(idMusica) then
+
+                -- 🚨 EL ARREGLO ESTÁ AQUÍ: getTimeStamp en lugar de getPosition 🚨
+                local currentTime = xSound:getTimeStamp(idMusica)
+                local duration = xSound:getMaxDuration(idMusica)
+
+                -- Si quedan 2 segundos o menos para que termine la canción
+                if duration > 0 and currentTime >= (duration - 2.0) then
+
+                    -- Comprobamos que TÚ seas el que inició la canción original para no mandar orden duplicada
+                    if radioInfo.data and radioInfo.data.currentId == myServerId then
+                        if uiAbierta then
+                            SendNUIMessage({
+                                action = "songEnded"
+                            })
+                        end
+                        -- Pausamos esta canción silenciosamente y esperamos 3 segundos 
+                        -- para evitar que mande la orden de "Siguiente" en bucle mientras JS carga
+                        xSound:Pause(idMusica)
+                        Wait(3000)
+                    end
+
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================
+-- 🔄 SINCRONIZADOR DE LA BARRA DE PROGRESO 🔄
+-- ============================================
+CreateThread(function()
+    while true do
+        Wait(250) -- 🚨 Acelerado al DOBLE (4 veces por segundo) para máxima fluidez
+
+        -- Solo gasta recursos si tienes el menú abierto
+        if uiAbierta then
+            for radioId, radioInfo in pairs(radiosActivas) do
+                local idMusica = 'id_' .. radioId
+
+                -- Buscamos si la radio está cerca y sonando
+                if xSound:soundExists(idMusica) and xSound:isPlaying(idMusica) then
+                    local currentPos = xSound:getTimeStamp(idMusica)
+                    local maxDur = xSound:getMaxDuration(idMusica)
+
+                    -- Enviamos los datos reales al JavaScript
+                    SendNUIMessage({
+                        action = "updateTime",
+                        currentTime = currentPos,
+                        duration = maxDur
+                    })
+                end
+            end
+        else
+            Wait(1000) -- Si el menú está cerrado, descansa para no consumir recursos
+        end
+    end
 end)
 
 -- ============================================
