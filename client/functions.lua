@@ -19,16 +19,55 @@ mandarNotificacion = function(titulo, descripcion, tipo)
     end
 end
 
+-- ==========================================
+-- 📡 NUEVO: RADAR DE ALTAVOCES CERCANOS
+-- ==========================================
+hayRadioCerca = function(coords, entityIgnore, radioMax)
+    local objetos = GetGamePool('CObject')
+    for _, obj in ipairs(objetos) do
+        if GetEntityModel(obj) == MODELO_RADIO and obj ~= entityIgnore then
+            local objCoords = GetEntityCoords(obj)
+            -- Si la distancia es menor o igual al radio máximo, hay un altavoz cerca
+            if #(coords - objCoords) <= radioMax then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- ==========================================
+-- REEMPLAZA TU FUNCIÓN equiparRadio POR ESTA
+-- ==========================================
 equiparRadio = function(radioEntidad)
     local equipada = true
     CreateThread(function()
-        exports['DP-TextUI']:MostrarUI('radio_soltar', 'Soltar radio en el suelo', 'E', false)
+        local uiMostrada = false -- Lo controlamos dinámicamente
+
         while equipada do
             Wait(0)
-            -- FIX: Usamos Pressed en lugar de Released
-            if IsControlJustPressed(0, 38) then
-                equipada = false
+
+            local playerCoords = GetEntityCoords(PlayerPedId())
+            -- Comprobamos si hay otro altavoz a menos de 10.0 metros (ignorando el que llevamos en la mano)
+            local cercaDeOtra = hayRadioCerca(playerCoords, radioEntidad, 10.0)
+
+            -- 🔄 CONTROL DINÁMICO DE LA UI (Aparece y desaparece al caminar)
+            if cercaDeOtra and uiMostrada then
                 exports['DP-TextUI']:OcultarUI('radio_soltar')
+                uiMostrada = false
+            elseif not cercaDeOtra and not uiMostrada then
+                exports['DP-TextUI']:MostrarUI('radio_soltar', 'Soltar radio en el suelo', 'E', false)
+                uiMostrada = true
+            end
+
+            -- FIX: Usamos Pressed en lugar de Released + CONDICIÓN DE DISTANCIA
+            -- Solo te deja soltarla si NO estás cerca de otra
+            if IsControlJustPressed(0, 38) and not cercaDeOtra then
+                equipada = false
+                if uiMostrada then
+                    exports['DP-TextUI']:OcultarUI('radio_soltar')
+                end
+
                 DetachEntity(radioEntidad)
                 PlaceObjectOnGroundProperly(radioEntidad)
                 FreezeEntityPosition(radioEntidad, true)
@@ -36,12 +75,26 @@ equiparRadio = function(radioEntidad)
                 if radiosActivas[radioEntidad] and
                     (radiosActivas[radioEntidad].data.estado == "reproduciendo" or
                         radiosActivas[radioEntidad].data.estado == "pausado") then
-                    radiosActivas[radioEntidad].pos = GetEntityCoords(radioEntidad)
                     TriggerServerEvent('DP-Boombox_v2:syncActive', radiosActivas)
-                    local idMusica = 'id_' .. radioEntidad
-                    TriggerServerEvent("DP-Boombox_v2:soundStatus", "position", idMusica, {
-                        position = radiosActivas[radioEntidad].pos
-                    })
+                end
+            end
+
+            -- GUARDAR EN INVENTARIO (La G siempre funciona, sin importar la distancia)
+            if IsControlJustPressed(0, 47) then
+                equipada = false
+                if uiMostrada then
+                    exports['DP-TextUI']:OcultarUI('radio_soltar')
+                end
+
+                DeleteEntity(radioEntidad)
+                if Framework == "ESX" then
+                    TriggerServerEvent('DP-Boombox_v2:giveItem', 'speaker')
+                elseif Framework == "qb" then
+                    TriggerServerEvent('DP-Boombox_v2:giveItem', 'boombox')
+                end
+
+                if radiosActivas[radioEntidad] then
+                    TriggerServerEvent('DP-Boombox_v2:stopMusic', radioEntidad)
                 end
             end
         end

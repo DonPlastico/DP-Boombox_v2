@@ -858,6 +858,12 @@ button {
     cursor: pointer;
 }
 
+.simple-control-btn.play-btn:hover,
+.simple-control-btn.left-right-btn:hover {
+    background: transparent !important;
+    color: var(--primary-color) !important;
+}
+
 /* Cambia la apariencia cuando el botón está desactivado */
 .simple-control-btn.play-btn:disabled {
     opacity: 0.5;

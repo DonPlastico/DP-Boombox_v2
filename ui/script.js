@@ -8,10 +8,12 @@ let isDraggingProgress = false;
 let isBufferingNewSong = false;
 let bufferingTimeout;
 let isLoopEnabled = localStorage.getItem('DPBoombox_Loop') === 'true';
+let isLoopSingleEnabled = localStorage.getItem('DPBoombox_LoopSingle') === 'true';
 let isShuffleEnabled = localStorage.getItem('DPBoombox_Shuffle') === 'true';
 let shuffleQueue = []; // Almacena el orden aleatorio matemático
 let currentShuffleIndex = -1; // Por dónde vamos en la cola aleatoria
 let isAutoChangingSong = false;
+
 
 // ==========================================
 // 2. RECEPCIÓN DE MENSAJES UNIFICADA (LUA -> JS)
@@ -53,7 +55,10 @@ window.addEventListener('message', function (event) {
             break;
 
         case "updateTime":
-            if (!isDraggingProgress) updateProgressBar(data);
+            // 🔒 FIX: Comprobamos que el tiempo que nos llega es EXCLUSIVAMENTE del altavoz que tenemos abierto
+            if (data.radioId == currentRadioId) {
+                updateProgressBar(data);
+            }
             break;
 
         case "loadPlaylists":
@@ -87,7 +92,7 @@ window.addEventListener('message', function (event) {
             break;
 
         case "songEnded":
-            playNextSong();
+            playNextSong(true);
             break;
     }
 });
@@ -136,7 +141,14 @@ function openPlayer(data) {
 
     // Actualizar UI
     document.getElementById('input-url').value = currentPlayingUrl;
-    updateVolumeUI(50); // Sincronizamos el UI al abrir
+
+    // Cargar volumen guardado de este altavoz específico
+    const savedVolume = localStorage.getItem('DPBoombox_Volume_' + currentRadioId);
+    if (savedVolume !== null) {
+        updateVolumeUI(parseInt(savedVolume)); // Ponemos el que tenía guardado
+    } else {
+        updateVolumeUI(50); // Si es la primera vez que se abre este altavoz, al 50%
+    }
 
     // QUE SE VEA LA FOTO NADA MÁS ABRIR EL MENÚ
     updateThumbnail(currentPlayingUrl);
@@ -151,8 +163,16 @@ function openPlayer(data) {
     }
 
     // Aplicar diseño de botones al abrir según el LocalStorage
-    document.getElementById('btn-toggle-loop').classList.toggle('active-state', isLoopEnabled);
     document.getElementById('btn-toggle-shuffle').classList.toggle('active-state', isShuffleEnabled);
+
+    // 🚨 PREVENCIÓN DE CONFLICTOS AL ARRANCAR
+    if (isLoopEnabled && isLoopSingleEnabled) {
+        isLoopEnabled = false;
+        localStorage.setItem('DPBoombox_Loop', false);
+    }
+
+    document.getElementById('btn-toggle-loop').classList.toggle('active-state', isLoopEnabled);
+    document.getElementById('btn-toggle-loop-single').classList.toggle('active-state', isLoopSingleEnabled);
 
     updatePlayButton();
 
@@ -222,11 +242,12 @@ function updateProgressBar(data) {
     // Si estamos esperando una nueva canción, miramos si el tiempo de Lua es muy bajo (menos de 1.5s).
     // Si es así, significa que la nueva canción YA EMPEZÓ y quitamos el bloqueo al instante.
     if (isBufferingNewSong) {
-        if (data.currentTime < 1.5 && data.duration > 0) {
+        // 🐛 BUG FIX: Exigimos que data.duration > 5 para confirmar que son los metadatos reales de YouTube
+        if (data.currentTime < 1.5 && data.duration > 5) {
             isBufferingNewSong = false;
             clearTimeout(bufferingTimeout); // Cancelamos el seguro
         } else {
-            return; // Sigue siendo la canción vieja muriendo, ignoramos sus tiempos.
+            return; // Sigue siendo la canción vieja muriendo o cargando, ignoramos sus tiempos.
         }
     }
 
@@ -258,7 +279,16 @@ document.getElementById('input-progress').addEventListener('input', e => {
 
 document.getElementById('input-progress').addEventListener('change', e => {
     isDraggingProgress = false;
-    fetchToLua('seekTime', { id: currentRadioId, time: e.target.value });
+    const seekValue = parseFloat(e.target.value);
+    const maxValue = parseFloat(e.target.max);
+
+    // 🚨 PREVENCIÓN ANTI-BUGS: Si arrastras la barra a los últimos 2 segundos de la canción,
+    // forzamos el salto a la siguiente para evitar que xSound se asfixie al cargar tan poco margen.
+    if (maxValue > 10 && seekValue >= (maxValue - 2.0)) {
+        playNextSong(true);
+    } else {
+        fetchToLua('seekTime', { id: currentRadioId, time: seekValue });
+    }
 });
 
 document.getElementById('input-url').addEventListener('input', e => {
@@ -317,6 +347,12 @@ document.addEventListener('click', e => {
 volInput.addEventListener('input', e => {
     const val = parseInt(e.target.value);
     updateVolumeUI(val);
+
+    // Guardamos el volumen en el PC asignado a la ID de este altavoz
+    if (currentRadioId) {
+        localStorage.setItem('DPBoombox_Volume_' + currentRadioId, val);
+    }
+
     fetchToLua('changeVolume', { id: currentRadioId, volume: val });
 });
 
@@ -434,7 +470,9 @@ document.getElementById('btn-play-action').addEventListener('click', async funct
         document.getElementById('total-time').innerText = "00:00";
 
         clearTimeout(bufferingTimeout);
-        bufferingTimeout = setTimeout(() => { isBufferingNewSong = false; }, 4000);
+        // 🚨 FIX: Aumentamos el escudo visual a 8 segundos para que el JS ignore 
+        // cualquier "tiempo fantasma" hasta que la nueva canción esté sonando de verdad.
+        bufferingTimeout = setTimeout(() => { isBufferingNewSong = false; }, 8000);
     }
 
     // 🚨 MAGIA ANTI-BUGS: ACTUALIZAMOS EL ESTADO DE INMEDIATO (SIN ESPERAR A INTERNET)
@@ -776,16 +814,16 @@ function toggleSongPlay(url, title) {
 
     // Si clicamos en una canción DIFERENTE a la que está sonando
     if (currentPlayingUrl !== url) {
-        
+
         isAutoChangingSong = true; // 🔒 BLOQUEAMOS EL ICONO VISUAL
-        
+
         urlInput.value = url;
         // Simulamos que el usuario ha escrito la URL para activar el botón principal
         urlInput.dispatchEvent(new Event('input'));
 
         // Cambiamos el título visualmente rápido para que se vea reactivo
         document.getElementById('now-playing-title').innerText = title;
-        
+
         isAutoChangingSong = false; // 🔓 DESBLOQUEAMOS
     }
 
@@ -1418,10 +1456,32 @@ function handleAddSongResult(status) {
 // ==========================================
 // 🔀 BOTONES EXTRA: BUCLE Y ALEATORIO
 // ==========================================
+// BUCLE NORMAL (TODA LA LISTA)
 document.getElementById('btn-toggle-loop').addEventListener('click', function () {
     isLoopEnabled = !isLoopEnabled;
     localStorage.setItem('DPBoombox_Loop', isLoopEnabled);
     this.classList.toggle('active-state', isLoopEnabled);
+
+    // Si encendemos este, apagamos el de "1 Canción" obligatoriamente
+    if (isLoopEnabled && isLoopSingleEnabled) {
+        isLoopSingleEnabled = false;
+        localStorage.setItem('DPBoombox_LoopSingle', false);
+        document.getElementById('btn-toggle-loop-single').classList.remove('active-state');
+    }
+});
+
+// BUCLE ÚNICO (UNA SOLA CANCIÓN)
+document.getElementById('btn-toggle-loop-single').addEventListener('click', function () {
+    isLoopSingleEnabled = !isLoopSingleEnabled;
+    localStorage.setItem('DPBoombox_LoopSingle', isLoopSingleEnabled);
+    this.classList.toggle('active-state', isLoopSingleEnabled);
+
+    // Si encendemos este, apagamos el "Normal" obligatoriamente
+    if (isLoopSingleEnabled && isLoopEnabled) {
+        isLoopEnabled = false;
+        localStorage.setItem('DPBoombox_Loop', false);
+        document.getElementById('btn-toggle-loop').classList.remove('active-state');
+    }
 });
 
 document.getElementById('btn-toggle-shuffle').addEventListener('click', function () {
@@ -1467,16 +1527,38 @@ function generateShuffleQueue(currentPlayingIndex = -1) {
 // CONTROLES DE ANTERIOR / SIGUIENTE (INTELIGENTES)
 // ==========================================
 document.getElementById('btn-prev-song').addEventListener('click', playPreviousSong);
-document.getElementById('btn-next-song').addEventListener('click', playNextSong);
+document.getElementById('btn-next-song').addEventListener('click', () => playNextSong(false));
 
-function playNextSong() {
-    // 1. Caso: Canción suelta o lista de 1 sola canción
+// 🚨 NUEVA FUNCIÓN: Fuerza a Lua a destruir y recrear la MISMA canción desde cero
+function forceRestartCurrentSong() {
+    isBufferingNewSong = true;
+    document.getElementById('input-progress').value = 0;
+    document.getElementById('current-time').innerText = "00:00";
+    clearTimeout(bufferingTimeout);
+    bufferingTimeout = setTimeout(() => { isBufferingNewSong = false; }, 8000);
+
+    fetchToLua('playerAction', {
+        id: currentRadioId,
+        url: currentPlayingUrl,
+        volume: document.getElementById('input-volume').value,
+        title: document.getElementById('now-playing-title').innerText,
+        action: "play"  // Al mandar "play" en vez de "resume", obligamos a Lua a limpiarla
+    });
+    currentState = "reproduciendo";
+    updatePlayButton();
+}
+
+function playNextSong(isAutoEnd = false) {
+    // 🚨 1. BUCLE DE UNA SOLA CANCIÓN (Solo actúa si la canción terminó sola)
+    if (isAutoEnd && isLoopSingleEnabled) {
+        forceRestartCurrentSong();
+        return;
+    }
+
+    // 2. Caso: Canción suelta o lista de 1 sola canción
     if (!currentPlaylistSongs || currentPlaylistSongs.length <= 1) {
-        if (isLoopEnabled) {
-            fetchToLua('seekTime', { id: currentRadioId, time: 0 });
-            fetchToLua('playerAction', { id: currentRadioId, action: "resume" }); // Forzamos reproducir
-            currentState = "reproduciendo";
-            updatePlayButton();
+        if (isLoopEnabled || (isAutoEnd && isLoopSingleEnabled)) {
+            forceRestartCurrentSong();
         } else {
             currentState = "pausado";
             updatePlayButton();
@@ -1486,9 +1568,8 @@ function playNextSong() {
 
     const currentIdx = currentPlaylistSongs.findIndex(song => song.url === currentPlayingUrl);
 
-    // 2. MODO ALEATORIO (SHUFFLE)
+    // 3. MODO ALEATORIO (SHUFFLE)
     if (isShuffleEnabled) {
-        // Si clickeaste una canción a mano, recalculamos la cola a partir de ella
         if (shuffleQueue.length === 0 || shuffleQueue[currentShuffleIndex] !== currentIdx) {
             generateShuffleQueue(currentIdx);
         }
@@ -1497,8 +1578,7 @@ function playNextSong() {
             // Se acabó el ciclo de la lista
             if (isLoopEnabled) {
                 const lastSongIdx = shuffleQueue[shuffleQueue.length - 1];
-                generateShuffleQueue(-1); // Generamos nuevo ciclo totalmente nuevo
-                // Evitar que la primera del nuevo ciclo sea la misma que la última del viejo
+                generateShuffleQueue(-1);
                 if (shuffleQueue[0] === lastSongIdx) {
                     [shuffleQueue[0], shuffleQueue[1]] = [shuffleQueue[1], shuffleQueue[0]];
                 }
@@ -1517,7 +1597,7 @@ function playNextSong() {
         return;
     }
 
-    // 3. MODO NORMAL (LINEAL)
+    // 4. MODO NORMAL (LINEAL)
     if (currentIdx !== -1) {
         let nextIndex = currentIdx + 1;
         if (nextIndex >= currentPlaylistSongs.length) {
@@ -1540,7 +1620,12 @@ function playPreviousSong() {
 
     // Si lleva más de 3 seg o es canción suelta, reinicia la canción actual
     if (currentTime > 3 || !currentPlaylistSongs || currentPlaylistSongs.length <= 1) {
-        fetchToLua('seekTime', { id: currentRadioId, time: 0 });
+        // Si estaba pausada por haber terminado, forzamos inicio limpio. Si está sonando, rebobinamos rápido.
+        if (currentState !== "reproduciendo") {
+            forceRestartCurrentSong();
+        } else {
+            fetchToLua('seekTime', { id: currentRadioId, time: 0 });
+        }
         return;
     }
 

@@ -17,7 +17,7 @@
 <h2>🛠️ Requisitos</h2>
 <ul>
   <li>Framework: <strong>ESX</strong> o <strong>QBCore</strong>.</li>
-  <li>Base de datos: <strong>oxmysql</strong> (Asegúrate de actualizar tu <code>fxmanifest.lua</code>).</li>
+  <li>Base de datos: <strong>oxmysql</strong>.</li>
   <li>Audio: <strong>xsound</strong>.</li>
 </ul>
 

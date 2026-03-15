@@ -4,6 +4,7 @@ Framework = nil
 local MODELO_RADIO = GetHashKey('prop_boombox_01')
 local ARMA_DESARMADO = GetHashKey('WEAPON_UNARMED')
 uiAbierta = false
+local tiempoBloqueo = {}
 
 if GetResourceState('es_extended') == 'started' or GetResourceState('es_extended') == 'starting' then
     Framework = 'ESX'
@@ -101,6 +102,15 @@ end)
 
 RegisterNetEvent('DP-Boombox_v2:useBoombox', function()
     local jugador = PlayerPedId()
+
+    -- BLOQUEO POR DISTANCIA AL USAR EL ITEM
+    local playerCoords = GetEntityCoords(jugador)
+    -- Buscamos si hay radios en el suelo a menos de 10 metros (0 = no ignorar ninguna)
+    if hayRadioCerca(playerCoords, 0, 10.0) then
+        mandarNotificacion('Error', 'Ya hay otro altavoz cerca. Aléjate para colocar uno nuevo.', 'error')
+        return -- Cortamos la función aquí para que no saque el altavoz
+    end
+
     local hash = cargarModelo(MODELO_RADIO)
     local x, y, z = table.unpack(GetOffsetFromEntityInWorldCoords(jugador, 0.0, 3.0, 0.5))
     local radioEntidad = CreateObjectNoOffset(hash, x, y, z, true, false)
@@ -160,6 +170,15 @@ RegisterNetEvent('DP-Boombox_v2:soundStatus', function(tipo, idMusica, datos)
                 xSound:Position(idMusica, datos.position)
             end
         elseif tipo == "play" then
+            tiempoBloqueo[idMusica] = GetGameTimer() + 8000 -- Ponemos la venda de 8 segundos a xSound
+
+            -- 🚨 FIX DEFINITIVO: DESTRUIR EL REPRODUCTOR VIEJO ANTES DE CREAR EL NUEVO
+            -- Esto limpia la caché de xSound y obliga a que la nueva canción empiece 100% en el segundo 0
+            if xSound:soundExists(idMusica) then
+                xSound:Destroy(idMusica)
+                Wait(50) -- Micro-pausa para asegurarnos de que se borre de la memoria de FiveM
+            end
+
             xSound:PlayUrlPos(idMusica, datos.link, datos.volume, datos.position)
             xSound:Distance(idMusica, datos.distance)
             xSound:setVolume(idMusica, datos.volume)
@@ -234,7 +253,6 @@ RegisterNUICallback('getPlaylists', function(_, cb)
                 action = "loadPlaylists",
                 data = listas
             })
-            cb('ok')
         end)
     elseif Framework == "qb" then
         QBCore.Functions.TriggerCallback('DP-Boombox_v2:fetchPlaylists', function(listas)
@@ -242,9 +260,10 @@ RegisterNUICallback('getPlaylists', function(_, cb)
                 action = "loadPlaylists",
                 data = listas
             })
-            cb('ok')
         end)
     end
+
+    cb('ok') -- 🔓 ¡SOLUCIÓN! Lo sacamos fuera para liberar el JS instantáneamente
 end)
 
 RegisterNUICallback('getPlaylistDetails', function(data, cb)
@@ -371,9 +390,11 @@ end)
 -- ============================================
 -- 🚨 AUTO-REPRODUCCIÓN Y CONTROL DE TIEMPO 🚨
 -- ============================================
+local cooldownFinCancion = {}
+
 CreateThread(function()
     while true do
-        Wait(1000) -- Revisamos el tiempo cada segundo
+        Wait(500) -- Lo bajamos a 500ms para que sea el doble de rápido y fluido detectando el final
 
         local myServerId = GetPlayerServerId(PlayerId())
 
@@ -383,26 +404,30 @@ CreateThread(function()
             -- Si la radio existe en el mundo y está sonando ahora mismo
             if xSound:soundExists(idMusica) and xSound:isPlaying(idMusica) then
 
-                -- 🚨 EL ARREGLO ESTÁ AQUÍ: getTimeStamp en lugar de getPosition 🚨
-                local currentTime = xSound:getTimeStamp(idMusica)
-                local duration = xSound:getMaxDuration(idMusica)
+                -- EL CANDADO: Si acaba de empezar, ignoramos el código por 8 segundos
+                if not tiempoBloqueo[idMusica] or GetGameTimer() > tiempoBloqueo[idMusica] then
 
-                -- Si quedan 2 segundos o menos para que termine la canción
-                if duration > 0 and currentTime >= (duration - 2.0) then
+                    local currentTime = xSound:getTimeStamp(idMusica)
+                    local duration = xSound:getMaxDuration(idMusica)
 
-                    -- Comprobamos que TÚ seas el que inició la canción original para no mandar orden duplicada
-                    if radioInfo.data and radioInfo.data.currentId == myServerId then
-                        if uiAbierta then
-                            SendNUIMessage({
-                                action = "songEnded"
-                            })
+                    -- Reducimos el margen a 1.5s para que apure más la canción antes de saltar
+                    if duration and currentTime and duration > 10.0 and currentTime > 5.0 and currentTime >=
+                        (duration - 1.5) then
+
+                        -- Comprobamos que TÚ seas el que inició la canción
+                        if radioInfo.data and radioInfo.data.currentId == myServerId then
+
+                            -- 🎁 FIX: Si no está en enfriamiento, mandamos la orden
+                            if not cooldownFinCancion[idMusica] or GetGameTimer() > cooldownFinCancion[idMusica] then
+                                cooldownFinCancion[idMusica] = GetGameTimer() + 5000 -- Bloqueamos esta radio 5 segs para no spamear
+
+                                SendNUIMessage({
+                                    action = "songEnded"
+                                })
+                            end
                         end
-                        -- Pausamos esta canción silenciosamente y esperamos 3 segundos 
-                        -- para evitar que mande la orden de "Siguiente" en bucle mientras JS carga
-                        xSound:Pause(idMusica)
-                        Wait(3000)
-                    end
 
+                    end
                 end
             end
         end
@@ -429,6 +454,7 @@ CreateThread(function()
                     -- Enviamos los datos reales al JavaScript
                     SendNUIMessage({
                         action = "updateTime",
+                        radioId = radioId,
                         currentTime = currentPos,
                         duration = maxDur
                     })
