@@ -20,7 +20,7 @@ mandarNotificacion = function(titulo, descripcion, tipo)
 end
 
 -- ==========================================
--- 📡 NUEVO: RADAR DE ALTAVOCES CERCANOS
+-- RADAR DE ALTAVOCES CERCANOS
 -- ==========================================
 hayRadioCerca = function(coords, entityIgnore, radioMax)
     local objetos = GetGamePool('CObject')
@@ -35,10 +35,6 @@ hayRadioCerca = function(coords, entityIgnore, radioMax)
     end
     return false
 end
-
--- ==========================================
--- REEMPLAZA TU FUNCIÓN equiparRadio POR ESTA
--- ==========================================
 equiparRadio = function(radioEntidad)
     local equipada = true
     CreateThread(function()
@@ -46,8 +42,33 @@ equiparRadio = function(radioEntidad)
 
         while equipada do
             Wait(0)
+            local jugador = PlayerPedId()
+            local playerCoords = GetEntityCoords(jugador)
 
-            local playerCoords = GetEntityCoords(PlayerPedId())
+            -- AUTO-SOLTAR AL INTENTAR SUBIR A UN COCHE
+            -- Detecta si estás intentando abrir una puerta o si, por algún bug, ya estás dentro
+            if GetVehiclePedIsTryingToEnter(jugador) ~= 0 or IsPedInAnyVehicle(jugador, false) then
+                equipada = false
+                if uiMostrada then
+                    exports['DP-TextUI']:OcultarUI('radio_soltar')
+                end
+
+                -- Soltamos el objeto inmediatamente en el suelo
+                DetachEntity(radioEntidad)
+                PlaceObjectOnGroundProperly(radioEntidad)
+                FreezeEntityPosition(radioEntidad, true)
+                
+                mandarNotificacion('Aviso', 'Has soltado el altavoz para poder subirte al vehículo.', 'error')
+
+                if radiosActivas[radioEntidad] and
+                    (radiosActivas[radioEntidad].data.estado == "reproduciendo" or
+                        radiosActivas[radioEntidad].data.estado == "pausado") then
+                    TriggerServerEvent('DP-Boombox_v2:syncActive', radiosActivas)
+                end
+                
+                break -- Salimos del bucle para terminar la función
+            end
+
             -- Comprobamos si hay otro altavoz a menos de 10.0 metros (ignorando el que llevamos en la mano)
             local cercaDeOtra = hayRadioCerca(playerCoords, radioEntidad, 10.0)
 
@@ -60,8 +81,7 @@ equiparRadio = function(radioEntidad)
                 uiMostrada = true
             end
 
-            -- FIX: Usamos Pressed en lugar de Released + CONDICIÓN DE DISTANCIA
-            -- Solo te deja soltarla si NO estás cerca de otra
+            -- SOLTAR (TECLA E)
             if IsControlJustPressed(0, 38) and not cercaDeOtra then
                 equipada = false
                 if uiMostrada then
@@ -79,7 +99,7 @@ equiparRadio = function(radioEntidad)
                 end
             end
 
-            -- GUARDAR EN INVENTARIO (La G siempre funciona, sin importar la distancia)
+            -- GUARDAR EN INVENTARIO (TECLA G)
             if IsControlJustPressed(0, 47) then
                 equipada = false
                 if uiMostrada then

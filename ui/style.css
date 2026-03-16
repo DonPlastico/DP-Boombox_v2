@@ -16,12 +16,14 @@
 
 html,
 body {
-    background: transparent !important;
     margin: 0;
     padding: 0;
-    overflow: hidden;
+    font-family: 'Roboto', sans-serif;
+    display: block;
     height: 100vh;
     width: 100vw;
+    background-color: transparent;
+    overflow: hidden;
     -webkit-user-select: none;
     user-select: none;
 }
@@ -133,6 +135,35 @@ button {
     margin-bottom: 5px;
     padding-bottom: 5px;
     min-height: 30px;
+}
+
+.page-header,
+.tab-page,
+.content-body,
+.player-page-content {
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+/* ==========================================
+   SISTEMA ANTI-COLISIÓN (BARRA LATERAL)
+========================================== */
+
+/* 1. Borde del panel por defecto (Tab a la izquierda) */
+#player-container {
+    border-radius: 0 4px 4px 4px !important;
+}
+
+/* 2. Cuando el Tab salta a la derecha */
+#player-container.sidebar-right {
+    border-radius: 4px 0 4px 4px !important;
+}
+
+/* 3. Posición y borde del propio Tab cuando salta a la derecha */
+#player-container.sidebar-right .tabs-sidebar {
+    left: auto !important;
+    right: -37px !important;
+    border-radius: 0 4px 4px 0 !important;
 }
 
 .modern-header {
@@ -581,7 +612,8 @@ button {
     gap: 5px;
     width: 100%;
     height: 100%;
-    flex-grow: 1; /* 👈 LA SOLUCIÓN REAL: Obliga a la caja a ocupar todo el alto disponible */
+    flex-grow: 1;
+    /* 👈 LA SOLUCIÓN REAL: Obliga a la caja a ocupar todo el alto disponible */
     box-sizing: border-box;
     padding-bottom: 20px;
 }
@@ -673,8 +705,10 @@ button {
     display: flex;
     align-items: center;
     width: 100%;
-    margin-top: auto; /* 👈 ESTA ES LA ÚNICA MAGIA: Empuja este div y lo que tenga debajo hacia el fondo */
-    padding-top: 10px; /* Un poco de aire por si añades muchas opciones arriba */
+    margin-top: auto;
+    /* 👈 ESTA ES LA ÚNICA MAGIA: Empuja este div y lo que tenga debajo hacia el fondo */
+    padding-top: 10px;
+    /* Un poco de aire por si añades muchas opciones arriba */
     padding-bottom: 5px;
 }
 
@@ -1161,9 +1195,6 @@ button {
     display: flex;
     flex-direction: column;
     flex: 1;
-    /* Ocupa exactamente la mitad del espacio disponible */
-    min-height: 0;
-    /* OBLIGATORIO para que funcione el scroll interno en flexbox */
 }
 
 /* Efecto visual para saber qué lista tenemos marcada */
@@ -1202,7 +1233,7 @@ button {
     display: flex;
     align-items: center;
     justify-content: center;
-    margin: 15px 0;
+    margin: 5px 0;
     /* Lo separa un poco del input de la URL */
     overflow: hidden;
     position: relative;
@@ -1312,7 +1343,84 @@ button {
     z-index: 2;
 }
 
+/* ==========================================
+   MODO EDICIÓN (ARRASTRE PREMIUM)
+========================================== */
+.draggable-mode {
+    border: 2px dashed #f1c40f !important;
+    cursor: move !important;
+    user-select: none !important;
+    transition: none !important;
+}
 
+.premium-drag-panel {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(15, 15, 15, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    box-shadow: 0 10px 40px rgb(0 0 0 / 80%), 0 0 15px rgb(255 255 255 / 5%);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 9999;
+}
+
+.drag-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: white;
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 1px;
+}
+
+.drag-panel-buttons {
+    display: flex;
+    gap: 10px;
+}
+
+.btn-success-premium,
+.btn-cancel-premium {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.btn-success-premium {
+    background: rgba(14, 160, 33, 0.2);
+    color: #0ea021;
+    border: 1px solid #0ea021;
+}
+
+.btn-success-premium:hover {
+    background: #0ea021;
+    color: white;
+}
+
+.btn-cancel-premium {
+    background: rgba(255, 68, 68, 0.2);
+    color: #ff4444;
+    border: 1px solid #ff4444;
+}
+
+.btn-cancel-premium:hover {
+    background: #ff4444;
+    color: white;
+}
 
 
 

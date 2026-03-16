@@ -14,6 +14,10 @@ let shuffleQueue = []; // Almacena el orden aleatorio matemático
 let currentShuffleIndex = -1; // Por dónde vamos en la cola aleatoria
 let isAutoChangingSong = false;
 let moveWhileOpen = false; // Ahora se controla desde la BD
+let isEditMode = false;
+let isDraggingUI = false;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
 
 
 // ==========================================
@@ -56,7 +60,6 @@ window.addEventListener('message', function (event) {
             break;
 
         case "updateTime":
-            // 🔒 FIX: Comprobamos que el tiempo que nos llega es EXCLUSIVAMENTE del altavoz que tenemos abierto
             if (data.radioId == currentRadioId) {
                 updateProgressBar(data);
             }
@@ -101,6 +104,21 @@ window.addEventListener('message', function (event) {
             const moveSwitch = document.getElementById('setting-move-ped');
             if (moveSwitch) {
                 moveSwitch.checked = moveWhileOpen;
+            }
+            break;
+
+        case "loadBoomboxPos":
+            if (data.top && data.left) {
+                const container = document.getElementById('player-container');
+                container.style.position = 'absolute';
+                container.style.margin = '0';
+                container.style.transform = 'none';
+                container.style.top = data.top;
+                container.style.left = data.left;
+
+                // Evaluar colisión al cargar la posición
+                const xPixels = (parseFloat(data.left) / 100) * window.innerWidth;
+                checkSidebarCollision(xPixels);
             }
             break;
     }
@@ -1735,4 +1753,164 @@ document.getElementById('setting-delete-all').addEventListener('click', function
 document.getElementById('setting-move-ped').addEventListener('change', function (e) {
     moveWhileOpen = e.target.checked;
     fetchToLua('updateMovePref', { status: moveWhileOpen }); // Avisamos a Lua para que actualice la BD
+});
+
+// ==========================================
+// 🖱️ SISTEMA DE ARRASTRE DEL REPRODUCTOR (MODO PREMIUM)
+// ==========================================
+const dragContainer = document.getElementById('player-container');
+const dragControls = document.getElementById('drag-controls');
+
+// Variables para recordar dónde estaba por si el usuario le da a CANCELAR
+let initialTop = '';
+let initialLeft = '';
+
+// 🪄 FUNCIÓN ANTI-COLISIÓN: Evalúa dónde está el panel
+function checkSidebarCollision(xPosPixels) {
+    const container = document.getElementById('player-container');
+    // Si estamos a menos de 80 píxeles del borde izquierdo, pasamos la barra a la derecha
+    if (xPosPixels < 80) {
+        container.classList.add('sidebar-right');
+    } else {
+        container.classList.remove('sidebar-right');
+    }
+}
+
+// 1. Botón de "Mover UI" en los ajustes
+document.getElementById('setting-drag-ui').addEventListener('click', function () {
+    enableDragMode();
+});
+
+// 2. Activar Modo Edición
+window.enableDragMode = () => {
+    isEditMode = true;
+
+    // Guardamos la posición actual por si queremos cancelar
+    initialTop = dragContainer.style.top;
+    initialLeft = dragContainer.style.left;
+
+    // Activamos las clases visuales y el panel superior
+    dragContainer.classList.add('draggable-mode');
+    if (dragControls) dragControls.style.display = 'flex';
+
+    // Lo preparamos para el movimiento si no estaba ya suelto
+    if (dragContainer.style.position !== 'absolute') {
+        const rect = dragContainer.getBoundingClientRect();
+        dragContainer.style.position = 'absolute';
+        dragContainer.style.margin = '0';
+        dragContainer.style.transform = 'none';
+        dragContainer.style.left = ((rect.left / window.innerWidth) * 100) + '%';
+        dragContainer.style.top = ((rect.top / window.innerHeight) * 100) + '%';
+    }
+
+    // Opcional: Cambiamos a la pestaña del reproductor para que el usuario vea la UI principal
+    switchToTab('page-player');
+};
+
+// 3. Guardar Posición (Botón Verde)
+window.saveMenuPosition = () => {
+    isEditMode = false;
+    dragContainer.classList.remove('draggable-mode');
+    if (dragControls) dragControls.style.display = 'none';
+
+    // Enviamos a Lua para guardar en Base de Datos
+    const posData = {
+        top: dragContainer.style.top,
+        left: dragContainer.style.left
+    };
+    fetchToLua('saveBoomboxPos', posData);
+};
+
+// 4. Cancelar Modo Edición (Botón Rojo o tecla ESC)
+window.cancelDragMode = () => {
+    isEditMode = false;
+    dragContainer.classList.remove('draggable-mode');
+    if (dragControls) dragControls.style.display = 'none';
+
+    // Restauramos la posición a como estaba antes de abrir el modo edición
+    dragContainer.style.top = initialTop;
+    dragContainer.style.left = initialLeft;
+
+    // 🪄 NUEVO: Re-evaluar por si hemos cancelado estando en un borde
+    let xPixels = window.innerWidth / 2; // Centro por defecto
+    if (initialLeft && initialLeft.includes('%')) {
+        xPixels = (parseFloat(initialLeft) / 100) * window.innerWidth;
+    }
+    checkSidebarCollision(xPixels);
+};
+
+// 5. FÍSICAS: Iniciar el arrastre (Clic)
+dragContainer.addEventListener('mousedown', (e) => {
+    if (!isEditMode) return;
+    if (['INPUT', 'BUTTON', 'LABEL', 'SPAN', 'ICONIFY-ICON'].includes(e.target.tagName)) return;
+
+    isDraggingUI = true;
+    const rect = dragContainer.getBoundingClientRect();
+    dragOffsetX = e.clientX - rect.left;
+    dragOffsetY = e.clientY - rect.top;
+});
+
+// 6. FÍSICAS: Mover el ratón
+document.addEventListener('mousemove', (e) => {
+    if (!isDraggingUI || !isEditMode) return;
+    e.preventDefault();
+
+    const screenWidth = window.innerWidth;
+    const screenHeight = window.innerHeight;
+    const menuRect = dragContainer.getBoundingClientRect();
+
+    let rawX = e.clientX - dragOffsetX;
+    let rawY = e.clientY - dragOffsetY;
+
+    // 1. Limitar el movimiento básico a los bordes de la pantalla
+    let clampedX = Math.max(0, Math.min(rawX, screenWidth - menuRect.width));
+    let clampedY = Math.max(0, Math.min(rawY, screenHeight - menuRect.height));
+
+    // 2. Si salta a la derecha (< 80px), el panel ocupa ~60px más hacia ese lado. 
+    // Re-calculamos el límite derecho para que la barra no se salga de la pantalla.
+    if (clampedX < 80) {
+        clampedX = Math.min(clampedX, screenWidth - menuRect.width - 60);
+    }
+
+    // 3. Aplicar la clase visual en tiempo real
+    checkSidebarCollision(clampedX);
+
+    // 4. Mover el panel
+    dragContainer.style.left = ((clampedX / screenWidth) * 100).toFixed(4) + '%';
+    dragContainer.style.top = ((clampedY / screenHeight) * 100).toFixed(4) + '%';
+});
+
+// 7. FÍSICAS: Soltar clic
+document.addEventListener('mouseup', () => {
+    if (isDraggingUI) {
+        isDraggingUI = false;
+    }
+});
+
+// 8. ESCAPE: Cancelar rápido si pulsa la tecla ESC (Mientras Lua no tenga bloqueada la tecla)
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isEditMode) {
+        cancelDragMode();
+    }
+});
+
+// ==========================================
+// ⌨️ DETECTOR DE ESCRITURA (ANTI-MOVIMIENTO)
+// ==========================================
+document.addEventListener('focusin', (e) => {
+    // Verificamos si hemos pinchado en un input de texto
+    const isTextInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
+
+    // Ignoramos los checkboxes, radios o sliders (type="range")
+    if (isTextInput && e.target.type !== 'checkbox' && e.target.type !== 'radio' && e.target.type !== 'range') {
+        fetchToLua('setTypingFocus', { isTyping: true });
+    }
+});
+
+document.addEventListener('focusout', (e) => {
+    const isTextInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
+
+    if (isTextInput && e.target.type !== 'checkbox' && e.target.type !== 'radio' && e.target.type !== 'range') {
+        fetchToLua('setTypingFocus', { isTyping: false });
+    }
 });

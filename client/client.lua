@@ -7,6 +7,7 @@ uiAbierta = false
 local tiempoBloqueo = {}
 local moveWhileOpen = false
 radioMenuAbierto = nil
+local isTyping = false
 
 if GetResourceState('es_extended') == 'started' or GetResourceState('es_extended') == 'starting' then
     Framework = 'ESX'
@@ -44,6 +45,17 @@ end)
 RegisterNUICallback('updateMovePref', function(data, cb)
     moveWhileOpen = data.status
     TriggerServerEvent('DP-Boombox_v2:saveMovePref', data.status) -- 💾 MANDA A GUARDAR A LA BD
+    cb('ok')
+end)
+
+RegisterNUICallback('saveBoomboxPos', function(data, cb)
+    -- Le pasamos directamente el objeto 'data' (que contiene top y left) al servidor
+    TriggerServerEvent('DP-Boombox_v2:saveBoomboxPos', data)
+    cb('ok')
+end)
+
+RegisterNUICallback('setTypingFocus', function(data, cb)
+    isTyping = data.isTyping
     cb('ok')
 end)
 
@@ -108,16 +120,25 @@ end)
 -- EVENTOS CORE
 -- ============================================
 
-RegisterNetEvent('DP-Boombox_v2:useBoombox', function()
+RegisterNetEvent('DP-Boombox_v2:useBoombox', function(nombreItem)
     local jugador = PlayerPedId()
+
+    -- BLOQUEO EN VEHÍCULOS
+    if IsPedInAnyVehicle(jugador, false) then
+        mandarNotificacion('Error', '¡No puedes utilizar este ítem dentro de un vehículo!', 'error')
+        return -- Cortamos aquí. El ítem no se borra, sigue en tu inventario.
+    end
 
     -- BLOQUEO POR DISTANCIA AL USAR EL ITEM
     local playerCoords = GetEntityCoords(jugador)
-    -- Buscamos si hay radios en el suelo a menos de 10 metros (0 = no ignorar ninguna)
+    -- Buscamos si hay radios en el suelo a menos de 10 metros
     if hayRadioCerca(playerCoords, 0, 10.0) then
         mandarNotificacion('Error', 'Ya hay otro altavoz cerca. Aléjate para colocar uno nuevo.', 'error')
-        return -- Cortamos la función aquí para que no saque el altavoz
+        return -- Cortamos aquí. El ítem no se borra.
     end
+
+    -- ✅ TODO ESTÁ CORRECTO: AHORA SÍ LE DECIMOS AL SERVIDOR QUE LO BORRE
+    TriggerServerEvent('DP-Boombox_v2:removeItem', nombreItem)
 
     local hash = cargarModelo(MODELO_RADIO)
     local x, y, z = table.unpack(GetOffsetFromEntityInWorldCoords(jugador, 0.0, 3.0, 0.5))
@@ -180,7 +201,6 @@ RegisterNetEvent('DP-Boombox_v2:soundStatus', function(tipo, idMusica, datos)
         elseif tipo == "play" then
             tiempoBloqueo[idMusica] = GetGameTimer() + 8000 -- Ponemos la venda de 8 segundos a xSound
 
-            -- 🚨 FIX DEFINITIVO: DESTRUIR EL REPRODUCTOR VIEJO ANTES DE CREAR EL NUEVO
             -- Esto limpia la caché de xSound y obliga a que la nueva canción empiece 100% en el segundo 0
             if xSound:soundExists(idMusica) then
                 xSound:Destroy(idMusica)
@@ -487,38 +507,47 @@ CreateThread(function()
 
     while true do
         if uiAbierta then
-            -- 1. Activamos la función mágica para que el juego siga leyendo el teclado
-            if not inputMantenido then
-                SetNuiFocusKeepInput(true)
-                inputMantenido = true
+            -- 1. Evaluamos si debemos permitir que el juego lea el teclado (NO si estamos escribiendo)
+            local deberiaMantenerInput = not isTyping
+
+            -- Encendemos o apagamos la "magia" dinámicamente
+            if inputMantenido ~= deberiaMantenerInput then
+                SetNuiFocusKeepInput(deberiaMantenerInput)
+                inputMantenido = deberiaMantenerInput
             end
 
-            -- 2. BLOQUEOS OBLIGATORIOS SIEMPRE (Para no disparar ni mover la cámara con el ratón)
-            DisableControlAction(0, 1, true) -- Cámara Derecha/Izquierda
-            DisableControlAction(0, 2, true) -- Cámara Arriba/Abajo
-            DisableControlAction(0, 24, true) -- Atacar (Click Izquierdo)
-            DisableControlAction(0, 25, true) -- Apuntar (Click Derecho)
-            DisableControlAction(0, 37, true) -- Rueda de armas (TAB)
-            DisableControlAction(0, 200, true) -- ESC (Para que no cierre el menú de pausa de GTA)
-            DisablePlayerFiring(PlayerPedId(), true) -- Seguro anti-disparos
+            -- 2. BLOQUEOS (Solo necesarios si el juego ESTÁ leyendo el teclado)
+            if deberiaMantenerInput then
+                DisableControlAction(0, 1, true) -- Cámara Derecha/Izquierda
+                DisableControlAction(0, 2, true) -- Cámara Arriba/Abajo
+                DisableControlAction(0, 24, true) -- Atacar (Click Izquierdo)
+                DisableControlAction(0, 25, true) -- Apuntar (Click Derecho)
+                DisableControlAction(0, 37, true) -- Rueda de armas (TAB)
+                DisableControlAction(0, 200, true) -- ESC
+                DisablePlayerFiring(PlayerPedId(), true)
 
-            -- 3. SI EL SWITCH ESTÁ APAGADO: Bloqueamos también el movimiento
-            if not moveWhileOpen then
-                DisableControlAction(0, 30, true) -- Mover Izquierda/Derecha (A/D)
-                DisableControlAction(0, 31, true) -- Mover Arriba/Abajo (W/S)
-                DisableControlAction(0, 21, true) -- Sprint (Shift)
-                DisableControlAction(0, 22, true) -- Salto (Espacio)
-                DisableControlAction(0, 36, true) -- Agacharse (CTRL)
+                -- Si el switch de "Moverme" está apagado, bloqueamos las teclas de movimiento
+                if not moveWhileOpen then
+                    DisableControlAction(0, 30, true) -- A/D
+                    DisableControlAction(0, 31, true) -- W/S
+                    DisableControlAction(0, 21, true) -- Sprint
+                    DisableControlAction(0, 22, true) -- Salto
+                    DisableControlAction(0, 36, true) -- Agacharse
+                end
+            else
+                -- Si estamos escribiendo, el juego ya ignora el teclado automáticamente, 
+                -- pero forzamos el bloqueo de la tecla ESC por seguridad para no abrir el menú de pausa.
+                DisableControlAction(0, 200, true)
             end
 
-            Wait(0) -- Corre ultrarrápido mientras la UI esté abierta
+            Wait(0)
         else
-            -- Si la UI se cierra, quitamos la función mágica
+            -- Si cerramos la UI, restauramos todo a la normalidad
             if inputMantenido then
                 SetNuiFocusKeepInput(false)
                 inputMantenido = false
             end
-            Wait(250) -- Descansa cuando la UI está cerrada
+            Wait(250)
         end
     end
 end)
@@ -589,16 +618,66 @@ local function CargarPreferenciasDB()
     end
 end
 
+-- ============================================
+-- 🔄 CARGAR PREFERENCIAS DESDE LA BD
+-- ============================================
+local function CargarPreferenciasDB()
+    if Framework == "ESX" then
+        ESX.TriggerServerCallback('DP-Boombox_v2:getMovePref', function(pref)
+            moveWhileOpen = pref
+            SendNUIMessage({
+                action = "updateMovePrefUI",
+                status = moveWhileOpen
+            })
+        end)
+    elseif Framework == "qb" then
+        QBCore.Functions.TriggerCallback('DP-Boombox_v2:getMovePref', function(pref)
+            moveWhileOpen = pref
+            SendNUIMessage({
+                action = "updateMovePrefUI",
+                status = moveWhileOpen
+            })
+        end)
+    end
+end
+
+-- 🪄 NUEVA: Función para cargar la posición del panel
+local function CargarPosicionDB()
+    if Framework == "ESX" then
+        ESX.TriggerServerCallback('DP-Boombox_v2:getBoomboxPos', function(pos)
+            if pos and pos.top and pos.left then
+                SendNUIMessage({
+                    action = "loadBoomboxPos",
+                    top = pos.top,
+                    left = pos.left
+                })
+            end
+        end)
+    elseif Framework == "qb" then
+        QBCore.Functions.TriggerCallback('DP-Boombox_v2:getBoomboxPos', function(pos)
+            if pos and pos.top and pos.left then
+                SendNUIMessage({
+                    action = "loadBoomboxPos",
+                    top = pos.top,
+                    left = pos.left
+                })
+            end
+        end)
+    end
+end
+
 -- Cuando el jugador carga en el servidor por primera vez
 RegisterNetEvent('esx:playerLoaded')
 AddEventHandler('esx:playerLoaded', function()
     Wait(3000)
     CargarPreferenciasDB()
+    CargarPosicionDB() -- 👈 Añadido
 end)
 
 RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
     Wait(3000)
     CargarPreferenciasDB()
+    CargarPosicionDB() -- 👈 Añadido
 end)
 
 -- Por si reinicias el script mientras estás dentro probando cosas
@@ -606,6 +685,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() == resourceName then
         Wait(2000)
         CargarPreferenciasDB()
+        CargarPosicionDB() -- 👈 Añadido
     end
 end)
 

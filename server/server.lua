@@ -304,8 +304,8 @@ if Framework == "ESX" then
     for nombreItem, _ in pairs(Config.Radios) do
         ESX.RegisterUsableItem(nombreItem, function(source)
             local xPlayer = ESX.GetPlayerFromId(source)
-            TriggerClientEvent('DP-Boombox_v2:useBoombox', source)
-            xPlayer.removeInventoryItem(nombreItem, 1)
+            -- Le mandamos al cliente qué ítem ha usado para que lo sepa
+            TriggerClientEvent('DP-Boombox_v2:useBoombox', source, nombreItem)
         end)
     end
 
@@ -323,8 +323,8 @@ elseif Framework == "qb" then
     for nombreItem, _ in pairs(Config.Radios) do
         QBCore.Functions.CreateUseableItem(nombreItem, function(source)
             local Player = QBCore.Functions.GetPlayer(source)
-            TriggerClientEvent('DP-Boombox_v2:useBoombox', source)
-            Player.Functions.RemoveItem(nombreItem, 1)
+            -- Le mandamos al cliente qué ítem ha usado para que lo sepa
+            TriggerClientEvent('DP-Boombox_v2:useBoombox', source, nombreItem)
         end)
     end
 
@@ -338,6 +338,22 @@ elseif Framework == "qb" then
         fetchPlaylistDetails(playlistId, Player.PlayerData.citizenid, cb)
     end)
 end
+
+-- Borrar el ítem SOLO si el cliente da luz verde
+RegisterNetEvent('DP-Boombox_v2:removeItem', function(nombreItem)
+    local src = source
+    if Framework == "ESX" then
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if xPlayer then
+            xPlayer.removeInventoryItem(nombreItem, 1)
+        end
+    elseif Framework == "qb" then
+        local Player = QBCore.Functions.GetPlayer(src)
+        if Player then
+            Player.Functions.RemoveItem(nombreItem, 1)
+        end
+    end
+end)
 
 -- ==========================================
 -- 🚀 EVENTOS DEL SERVIDOR (LÓGICA)
@@ -920,7 +936,7 @@ if Framework == "ESX" then
             MySQL.Async.fetchScalar('SELECT boombox_move_open FROM dp_preferences WHERE citizenid = @id', {
                 ['@id'] = xPlayer.identifier
             }, function(result)
-                cb(result == 1) 
+                cb(result == 1)
             end)
         else
             cb(false)
@@ -949,13 +965,19 @@ RegisterNetEvent('DP-Boombox_v2:saveMovePref', function(status)
 
     if Framework == "ESX" then
         local xPlayer = ESX.GetPlayerFromId(src)
-        if xPlayer then identifier = xPlayer.identifier end
+        if xPlayer then
+            identifier = xPlayer.identifier
+        end
     elseif Framework == "qb" then
         local Player = QBCore.Functions.GetPlayer(src)
-        if Player then identifier = Player.PlayerData.citizenid end
+        if Player then
+            identifier = Player.PlayerData.citizenid
+        end
     end
 
-    if not identifier then return end
+    if not identifier then
+        return
+    end
 
     local valorInt = status and 1 or 0
 
@@ -967,6 +989,87 @@ RegisterNetEvent('DP-Boombox_v2:saveMovePref', function(status)
     ]], {
         ['@id'] = identifier,
         ['@valor'] = valorInt
+    })
+end)
+
+-- ============================================
+-- 📍 POSICIONAMIENTO DEL PANEL (BASE DE DATOS)
+-- ============================================
+
+-- 1. Callback para OBTENER la posición al cargar el jugador
+if Framework == "ESX" then
+    ESX.RegisterServerCallback('DP-Boombox_v2:getBoomboxPos', function(source, cb)
+        local xPlayer = ESX.GetPlayerFromId(source)
+        if xPlayer then
+            MySQL.Async.fetchAll('SELECT boombox_top, boombox_left FROM dp_preferences WHERE citizenid = @id', {
+                ['@id'] = xPlayer.identifier
+            }, function(result)
+                -- Si hay resultado y no son NULL, los enviamos
+                if result[1] and result[1].boombox_top and result[1].boombox_left then
+                    cb({
+                        top = result[1].boombox_top,
+                        left = result[1].boombox_left
+                    })
+                else
+                    cb(nil)
+                end
+            end)
+        else
+            cb(nil)
+        end
+    end)
+elseif Framework == "qb" then
+    QBCore.Functions.CreateCallback('DP-Boombox_v2:getBoomboxPos', function(source, cb)
+        local Player = QBCore.Functions.GetPlayer(source)
+        if Player then
+            MySQL.Async.fetchAll('SELECT boombox_top, boombox_left FROM dp_preferences WHERE citizenid = @id', {
+                ['@id'] = Player.PlayerData.citizenid
+            }, function(result)
+                if result[1] and result[1].boombox_top and result[1].boombox_left then
+                    cb({
+                        top = result[1].boombox_top,
+                        left = result[1].boombox_left
+                    })
+                else
+                    cb(nil)
+                end
+            end)
+        else
+            cb(nil)
+        end
+    end)
+end
+
+-- 2. Evento para GUARDAR la posición cuando el jugador suelta el panel
+RegisterNetEvent('DP-Boombox_v2:saveBoomboxPos', function(posData)
+    local src = source
+    local identifier = nil
+
+    if Framework == "ESX" then
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if xPlayer then
+            identifier = xPlayer.identifier
+        end
+    elseif Framework == "qb" then
+        local Player = QBCore.Functions.GetPlayer(src)
+        if Player then
+            identifier = Player.PlayerData.citizenid
+        end
+    end
+
+    if not identifier or not posData or not posData.top or not posData.left then
+        return
+    end
+
+    -- Guardamos las nuevas coordenadas en sus columnas exclusivas
+    MySQL.Async.execute([[
+        INSERT INTO dp_preferences (citizenid, boombox_top, boombox_left) 
+        VALUES (@id, @top, @left) 
+        ON DUPLICATE KEY UPDATE boombox_top = @top, boombox_left = @left
+    ]], {
+        ['@id'] = identifier,
+        ['@top'] = posData.top,
+        ['@left'] = posData.left
     })
 end)
 

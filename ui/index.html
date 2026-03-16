@@ -38,7 +38,7 @@
                 </div>
             </div>
 
-            <div id="page-player" class="tab-page active-tab" style="display: flex;"> ```
+            <div id="page-player" class="tab-page active-tab" style="display: flex;">
                 <div class="content-body">
                     <div class="now-playing-container">
                         <span class="now-playing-label">ESTADO ACTUAL</span>
@@ -268,6 +268,21 @@
         </div>
 
         <div class="floating-tooltip" id="volume-tooltip">50%</div>
+    </div>
+
+    <div id="drag-controls" class="controles-mover_menu premium-drag-panel" style="display: none;">
+        <div class="drag-panel-header">
+            <iconify-icon icon="mdi:cursor-move" style="color: #ccc; font-size: 18px;"></iconify-icon>
+            <span>MODO EDICIÓN DE INTERFAZ</span>
+        </div>
+        <div class="drag-panel-buttons">
+            <button id="save-pos-btn" class="btn-success-premium" onclick="saveMenuPosition()">
+                <iconify-icon icon="mdi:content-save"></iconify-icon> GUARDAR
+            </button>
+            <button class="btn-cancel-premium" onclick="cancelDragMode()">
+                <iconify-icon icon="mdi:close-circle-outline"></iconify-icon> CANCELAR
+            </button>
+        </div>
     </div>
 
     <script src="script.js"></script>
