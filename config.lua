@@ -24,3 +24,16 @@ Config.Radios = {
     --     rango = 150
     -- }
 }
+
+-- Configuración de radio para coche
+Config.CarRadio = {
+    ItemInstall = 'vehicle_radio', -- El nombre del ítem que acabamos de crear en qb-core
+    Command = 'carradio', -- El comando para abrir el menú estando dentro
+    InstallTime = 7500, -- Tiempo de la barra de progreso al instalar (en milisegundos)
+    VolumeMax = 100, -- Volumen máximo permitido
+    Distance = 25.0, -- Rango máximo al que se escuchará el coche desde fuera
+
+    -- Configuraciones de animaciones al instalar
+    AnimDict = "mini@repair",
+    AnimName = "fixing_a_ped"
+}

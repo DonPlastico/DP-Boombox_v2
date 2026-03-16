@@ -152,11 +152,22 @@ RegisterNetEvent('DP-Boombox_v2:useBoombox', function(nombreItem)
 end)
 
 RegisterNetEvent('DP-Boombox_v2:deleteObj', function(netId)
-    local entidad = NetToObj(netId)
-    if DoesEntityExist(entidad) then
-        DeleteObject(entidad)
-        if not DoesEntityExist(entidad) then
-            TriggerServerEvent('DP-Boombox_v2:objDeleted')
+    local obj = NetworkGetEntityFromNetworkId(netId)
+
+    if obj and DoesEntityExist(obj) then
+        -- Pedimos permiso a FiveM para tomar el control de este objeto (por si lo puso otro)
+        NetworkRequestControlOfEntity(obj)
+
+        local timeout = 0
+        -- Esperamos hasta medio segundo para que FiveM nos ceda el control
+        while not NetworkHasControlOfEntity(obj) and timeout < 50 do
+            Wait(10)
+            timeout = timeout + 1
+        end
+
+        -- Una vez tenemos el control (o si ya lo teníamos), lo destruimos
+        if NetworkHasControlOfEntity(obj) then
+            DeleteEntity(obj)
         end
     end
 end)
@@ -257,11 +268,9 @@ end)
 
 -- Recibir la orden del servidor de refrescar las listas
 RegisterNetEvent('DP-Boombox_v2:refreshPlaylists', function()
-    if uiAbierta then
-        SendNUIMessage({
-            action = "requestPlaylistsRefresh"
-        })
-    end
+    SendNUIMessage({
+        action = "refreshPlaylists"
+    })
 end)
 
 -- Recibimos las canciones del servidor y se las inyectamos al HTML
@@ -365,12 +374,12 @@ RegisterNUICallback('addSongToPlaylist', function(data, cb)
 end)
 
 RegisterNetEvent('DP-Boombox_v2:refreshPlaylistSongs', function(playlistId)
-    if uiAbierta then
-        SendNUIMessage({
-            action = "requestSongsRefresh",
-            playlistId = playlistId
-        })
-    end
+    -- Quitamos el 'if uiAbierta' para que reciba la señal siempre.
+    -- El JavaScript se encargará de decidir si necesita redibujar la pantalla o no.
+    SendNUIMessage({
+        action = "forceRefreshSongs",
+        playlistId = playlistId
+    })
 end)
 
 RegisterNetEvent('DP-Boombox_v2:addSongResult', function(status)
@@ -717,4 +726,193 @@ AddEventHandler('onResourceStop', function(resourceName)
 
     -- 3. OCULTAR UI PARA EVITAR TEXTOS PEGADOS
     exports['DP-TextUI']:OcultarUI()
+end)
+
+-- ============================================
+-- 🚗 SISTEMA DE RADIO PARA VEHÍCULOS
+-- ============================================
+
+-- 1. Evento para instalar la radio (Se llama desde el server al usar el ítem 'vehicle_radio')
+RegisterNetEvent('DP-Boombox_v2:installCarRadio', function()
+    local ped = PlayerPedId()
+
+    if not IsPedInAnyVehicle(ped, false) then
+        mandarNotificacion('Error', 'Debes estar sentado dentro de un vehículo para instalar la radio.', 'error')
+        return
+    end
+
+    local veh = GetVehiclePedIsIn(ped, false)
+    local plate = GetVehicleNumberPlateText(veh)
+    if not plate then
+        return
+    end
+
+    -- Limpiamos los espacios en blanco de la matrícula por seguridad para la Base de Datos
+    plate = string.gsub(plate, "^%s*(.-)%s*$", "%1")
+
+    -- Preguntamos al servidor si este coche ya tiene radio instalada
+    if Framework == "ESX" then
+        ESX.TriggerServerCallback('DP-Boombox_v2:checkCarRadio', function(hasRadio)
+            if hasRadio then
+                mandarNotificacion('Error', 'Este vehículo ya tiene un sistema de sonido instalado.', 'error')
+            else
+                IniciarInstalacionRadio(veh, plate)
+            end
+        end, plate)
+    elseif Framework == "qb" then
+        QBCore.Functions.TriggerCallback('DP-Boombox_v2:checkCarRadio', function(hasRadio)
+            if hasRadio then
+                mandarNotificacion('Error', 'Este vehículo ya tiene un sistema de sonido instalado.', 'error')
+            else
+                IniciarInstalacionRadio(veh, plate)
+            end
+        end, plate)
+    end
+end)
+
+-- 2. Función de la Barra de Progreso y Animación
+function IniciarInstalacionRadio(veh, plate)
+    local ped = PlayerPedId()
+    local animDict = Config.CarRadio.AnimDict or "mini@repair"
+    local animName = Config.CarRadio.AnimName or "fixing_a_ped"
+    local installTime = Config.CarRadio.InstallTime or 7500
+
+    while not HasAnimDictLoaded(animDict) do
+        Wait(10)
+        RequestAnimDict(animDict)
+    end
+    TaskPlayAnim(ped, animDict, animName, 8.0, -8.0, -1, 49, 0, false, false, false)
+
+    local function InstalacionCompletada()
+        ClearPedTasks(ped)
+        -- Le decimos al servidor que guarde la matrícula y nos quite el ítem
+        TriggerServerEvent('DP-Boombox_v2:carRadioInstalled', plate)
+        mandarNotificacion('Éxito', 'Has instalado la radio en el vehículo.', 'success')
+
+        -- Le avisamos al inventario al instante para que encienda el botón
+        TriggerEvent('DP-Inventory:client:UpdateVehicleRadio', true)
+    end
+
+    local function InstalacionCancelada()
+        ClearPedTasks(ped)
+        mandarNotificacion('Error', 'Instalación cancelada.', 'error')
+    end
+
+    -- Ejecutamos la barra de progreso correspondiente
+    if Framework == "qb" then
+        QBCore.Functions.Progressbar("install_radio", "Instalando sistema de sonido...", installTime, false, true, {
+            disableMovement = true,
+            disableCarMovement = true,
+            disableMouse = false,
+            disableCombat = true
+        }, {}, {}, {}, InstalacionCompletada, InstalacionCancelada)
+    elseif Framework == "ESX" then
+        -- Usamos el export estándar 'progressbar'. Si tu server ESX usa ox_lib, avísame y te lo adapto a lib.progressBar
+        exports['progressbar']:Progress({
+            name = "install_radio",
+            duration = installTime,
+            label = "Instalando sistema de sonido...",
+            useWhileDead = false,
+            canCancel = true,
+            controlDisables = {
+                disableMovement = true,
+                disableCarMovement = true,
+                disableCombat = true
+            }
+        }, function(cancelled)
+            if not cancelled then
+                InstalacionCompletada()
+            else
+                InstalacionCancelada()
+            end
+        end)
+    end
+end
+
+-- 3. Comando y Export para ABRIR la radio
+RegisterCommand(Config.CarRadio.Command, function()
+    AbrirRadioVehiculo()
+end)
+exports('OpenCarRadio', function()
+    AbrirRadioVehiculo()
+end)
+
+function AbrirRadioVehiculo()
+    local ped = PlayerPedId()
+    if not IsPedInAnyVehicle(ped, false) then
+        mandarNotificacion('Error', 'Debes estar dentro de un vehículo para usar la radio.', 'error')
+        return
+    end
+
+    local veh = GetVehiclePedIsIn(ped, false)
+    local plate = GetVehicleNumberPlateText(veh)
+    plate = string.gsub(plate, "^%s*(.-)%s*$", "%1")
+
+    -- Verificamos si tiene radio antes de abrir el panel
+    if Framework == "ESX" then
+        ESX.TriggerServerCallback('DP-Boombox_v2:checkCarRadio', function(hasRadio)
+            if hasRadio then
+                abrirMenuRadioVehiculo(veh, plate)
+            else
+                mandarNotificacion('Error', 'Este vehículo no tiene radio instalada.', 'error')
+            end
+        end, plate)
+    elseif Framework == "qb" then
+        QBCore.Functions.TriggerCallback('DP-Boombox_v2:checkCarRadio', function(hasRadio)
+            if hasRadio then
+                abrirMenuRadioVehiculo(veh, plate)
+            else
+                mandarNotificacion('Error', 'Este vehículo no tiene radio instalada.', 'error')
+            end
+        end, plate)
+    end
+end
+
+-- 4. Adaptación del Menú para Coches (Usa la matrícula como ID en lugar del número de entidad)
+function abrirMenuRadioVehiculo(veh, plate)
+    uiAbierta = true
+    radioMenuAbierto = veh
+    local radioId = "veh_" .. plate
+
+    if not radiosActivas[radioId] then
+        radiosActivas[radioId] = {
+            pos = GetEntityCoords(veh),
+            isVehicle = true,
+            entity = veh,
+            data = {
+                estado = "detenido",
+                link = "",
+                title = nil
+            }
+        }
+    else
+        radiosActivas[radioId].pos = GetEntityCoords(veh)
+        radiosActivas[radioId].entity = veh
+    end
+    TriggerServerEvent('DP-Boombox_v2:syncActive', radiosActivas)
+
+    SetNuiFocus(true, true)
+    SendNUIMessage({
+        action = "openPlayer",
+        id = radioId,
+        estado = radiosActivas[radioId].data.estado,
+        link = radiosActivas[radioId].data.link,
+        title = radiosActivas[radioId].data.title
+    })
+end
+
+-- 5. Bucle para actualizar la posición 3D de la música mientras el coche conduce
+CreateThread(function()
+    while true do
+        Wait(200) -- Se actualiza 5 veces por segundo
+        for radioId, info in pairs(radiosActivas) do
+            if info.isVehicle and info.entity and DoesEntityExist(info.entity) then
+                local coords = GetEntityCoords(info.entity)
+                local idMusica = 'id_' .. radioId
+                if exports.xsound:soundExists(idMusica) and exports.xsound:isPlaying(idMusica) then
+                    exports.xsound:Position(idMusica, coords)
+                end
+            end
+        end
+    end
 end)

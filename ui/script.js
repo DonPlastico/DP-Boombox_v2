@@ -69,7 +69,7 @@ window.addEventListener('message', function (event) {
             renderPlaylists(data.data);
             break;
 
-        case "requestPlaylistsRefresh":
+        case "refreshPlaylists": // ✅ AHORA SÍ COINCIDE CON LUA
             fetchToLua('getPlaylists');
             break;
 
@@ -121,6 +121,16 @@ window.addEventListener('message', function (event) {
                 checkSidebarCollision(xPixels);
             }
             break;
+
+        case "forceRefreshSongs":
+            if (currentSelectedPlaylistId && currentSelectedPlaylistId == data.playlistId) {
+                // Si estamos mirando justo la lista que ha cambiado, le pedimos a Lua los datos frescos
+                fetchToLua('getPlaylistSongs', { playlistId: currentSelectedPlaylistId });
+            }
+            break;
+
+        default:
+            console.warn(`Unexpected action: ${event.data.action}`);
     }
 });
 
@@ -140,6 +150,12 @@ function closeUI() {
     document.getElementById('modal-overlay').style.display = 'none';
     document.getElementById('dropdown-add-playlist').style.display = 'none';
     document.getElementById('dropdown-add-song').style.display = 'none';
+
+    // Limpiamos la memoria de la UI para evitar clics con datos cacheados
+    document.getElementById('library-content').innerHTML = '';
+    document.getElementById('songs-list-content').innerHTML = '';
+    currentSelectedPlaylistId = null;
+    currentPlaylistSongs = [];
 
     document.getElementById('app').style.display = 'none';
     fetchToLua('closeUI');
@@ -690,6 +706,20 @@ function generatePlaylistCover(urls) {
 
 // RENDERIZAR PLAYLISTS AL RECIBIRLAS DE LUA
 function renderPlaylists(listas) {
+    // Guardamos las listas globalmente para leer los permisos luego
+    window.userPlaylists = listas || [];
+
+    // Recuperar la lista guardada si acabamos de abrir la UI
+    if (!currentSelectedPlaylistId) {
+        const savedPlId = localStorage.getItem('DPBoombox_LastPlaylist');
+        // Verificamos si existe en la memoria Y si la lista aún es tuya
+        if (savedPlId && window.userPlaylists.find(p => p.id == savedPlId)) {
+            currentSelectedPlaylistId = parseInt(savedPlId);
+        } else {
+            localStorage.removeItem('DPBoombox_LastPlaylist'); // Si ya no la tienes, borramos la memoria
+        }
+    }
+
     const container = document.getElementById('library-content');
     container.innerHTML = '';
 
@@ -733,7 +763,27 @@ function renderPlaylists(listas) {
 
         container.appendChild(div);
     });
-}
+
+    // 🪄 AUTO-RECARGA MEJORADA: Carga en vivo o al abrir el menú
+    if (currentSelectedPlaylistId) {
+        const pl = window.userPlaylists.find(p => p.id == currentSelectedPlaylistId);
+        if (pl) {
+            // Restauramos el botón "+" si tiene permisos
+            const isOwner = pl ? (pl.is_owner == 1 || pl.is_owner === true) : false;
+            const canAdd = isOwner || (pl && (pl.perm_add == 1 || pl.perm_add === true));
+            document.getElementById('btn-add-song').style.display = canAdd ? 'flex' : 'none';
+
+            // Si las canciones ya están cargadas en memoria (estás con el menú abierto), las redibujamos
+            if (currentPlaylistSongs && currentPlaylistSongs.length > 0) {
+                renderSongsList(currentPlaylistSongs, pl.name);
+            } else {
+                // Si la memoria está vacía (acabas de abrir el menú), le pedimos a Lua que descargue las canciones
+                document.getElementById('songs-section-title').innerText = `Canciones de "${pl.name}" (Cargando...)`;
+                fetchToLua('getPlaylistSongs', { playlistId: currentSelectedPlaylistId });
+            }
+        }
+    }
+} // <- Fin de la función renderPlaylists
 
 // ==========================================
 // LÓGICA DE CANCIONES Y SELECCIÓN (CON DESELECCIÓN)
@@ -742,6 +792,7 @@ function selectPlaylist(id, name) {
     // Si hacemos clic en la misma lista que ya estaba seleccionada, la deseleccionamos
     if (currentSelectedPlaylistId === id) {
         currentSelectedPlaylistId = null;
+        localStorage.removeItem('DPBoombox_LastPlaylist'); // 🪄 NUEVO: Borramos de la memoria
 
         // 1. Quitamos la selección visual (quitando la clase y refrescando)
         document.querySelectorAll('.playlist-item').forEach(item => item.classList.remove('selected'));
@@ -761,11 +812,17 @@ function selectPlaylist(id, name) {
                 <p>Haz clic en una lista de arriba para ver sus canciones.</p>
             </div>
         `;
-        return; // Salimos de la función aquí para no ejecutar la carga de canciones
+        return; // Salimos de la función aquí
     }
 
     // --- SI ES UNA LISTA NUEVA, HACEMOS LA CARGA NORMAL ---
     currentSelectedPlaylistId = id;
+    localStorage.setItem('DPBoombox_LastPlaylist', id); // 🪄 NUEVO: Guardamos en la memoria
+
+    // 🪄 LÓGICA DE PERMISOS: Buscamos si es dueño o tiene permiso de añadir
+    const pl = window.userPlaylists.find(p => p.id == currentSelectedPlaylistId); // Usamos == en lugar de ===
+    const isOwner = pl ? (pl.is_owner == 1 || pl.is_owner === true) : false;
+    const canAdd = isOwner || (pl && (pl.perm_add == 1 || pl.perm_add === true));
 
     // 1. Efecto visual: Marcamos la lista seleccionada
     document.querySelectorAll('.playlist-item').forEach(item => item.classList.remove('selected'));
@@ -775,8 +832,13 @@ function selectPlaylist(id, name) {
     // 2. Cambiamos el texto del panel inferior
     document.getElementById('songs-section-title').innerText = `Canciones de "${name}" (Cargando...)`;
 
-    // 3. Mostramos el botón "+" de la zona inferior
-    document.getElementById('btn-add-song').style.display = 'flex';
+    // 3. Mostramos el botón "+" de la zona inferior SOLO SI TIENE PERMISO
+    if (canAdd) {
+        document.getElementById('btn-add-song').style.display = 'flex';
+    } else {
+        document.getElementById('btn-add-song').style.display = 'none';
+        document.getElementById('dropdown-add-song').style.display = 'none'; // Cerramos el desplegable por si acaso
+    }
 
     // 4. Pedimos a Lua las canciones de esta playlist
     fetchToLua('getPlaylistSongs', { playlistId: id });
@@ -785,6 +847,11 @@ function selectPlaylist(id, name) {
 function renderSongsList(songs, playlistName) {
     // GUARDAMOS LAS CANCIONES EN MEMORIA PARA VERIFICAR DUPLICADOS LUEGO
     currentPlaylistSongs = songs;
+
+    // 🪄 LÓGICA DE PERMISOS: Buscamos si es dueño o tiene permiso de eliminar
+    const pl = window.userPlaylists.find(p => p.id == currentSelectedPlaylistId); // Usamos == en lugar de ===
+    const isOwner = pl ? (pl.is_owner == 1 || pl.is_owner === true) : false;
+    const canDelete = isOwner || (pl && (pl.perm_delete == 1 || pl.perm_delete === true));
 
     const container = document.getElementById('songs-list-content');
     const title = document.getElementById('songs-section-title');
@@ -819,13 +886,20 @@ function renderSongsList(songs, playlistName) {
         let iconType = isPlayingThis ? "mdi:pause" : "mdi:play";
         let overlayClass = (isPlayingThis || isPausedThis) ? "pl-play-overlay active" : "pl-play-overlay";
 
-        // El HTML de la portada ahora incluye nuestro botón oculto
+        // El HTML de la portada
         const coverHtml = `
             <div class="pl-cover" style="background-image: url('${thumbUrl}'); background-size: cover; background-position: center;">
                 <div class="${overlayClass}" data-url="${song.url}" onclick="event.stopPropagation(); toggleSongPlay('${song.url}', '${song.label.replace(/'/g, "\\'")}')">
                     <iconify-icon icon="${iconType}"></iconify-icon>
                 </div>
             </div>`;
+
+        // 🪄 SOLO PINTAMOS LA PAPELERA SI TIENE PERMISO
+        const deleteHtml = canDelete ? `
+            <button class="btn-icon delete" title="Eliminar" onclick="event.stopPropagation(); deleteSongFromList(${song.id}, ${currentSelectedPlaylistId})">
+                <iconify-icon icon="mdi:trash-can"></iconify-icon>
+            </button>
+        ` : ``;
 
         div.innerHTML = `
             ${coverHtml}
@@ -834,9 +908,7 @@ function renderSongsList(songs, playlistName) {
                 <span class="pl-role">${song.author || 'Sin autor'}</span>
             </div>
             <div class="pl-actions">
-                <button class="btn-icon delete" title="Eliminar" onclick="event.stopPropagation(); deleteSongFromList(${song.id}, ${currentSelectedPlaylistId})">
-                    <iconify-icon icon="mdi:trash-can"></iconify-icon>
-                </button>
+                ${deleteHtml}
             </div>
         `;
         container.appendChild(div);
@@ -984,6 +1056,54 @@ document.getElementById('btn-import-playlist').addEventListener('click', () => {
 });
 
 // ==========================================
+// ACCIÓN: IMPORTAR LISTA NUEVA DESDE YOUTUBE
+// ==========================================
+document.getElementById('btn-import-yt-playlist').addEventListener('click', () => {
+    dropdownAddPlaylist.style.display = 'none'; // Cerramos el desplegable
+
+    // HTML dinámico para el modal
+    const content = `
+        <div class="input-group" style="text-align: left;">
+            <label>URL DE LA LISTA DE YOUTUBE</label>
+            <input type="text" id="input-yt-playlist-url" placeholder="Ejemplo: https://youtube.com/playlist?list=PL..." required>
+        </div>
+        <div class="modal-actions" style="margin-top: 15px;">
+            <button type="button" class="btn btn-solid" id="btn-confirm-yt-import">CREAR E IMPORTAR LISTA</button>
+        </div>
+    `;
+
+    showDynamicModal('logos:youtube-icon', 'IMPORTAR DESDE YOUTUBE', 'Crea una lista nueva descargando desde YT', content);
+    setTimeout(() => document.getElementById('input-yt-playlist-url').focus(), 100);
+
+    // Lógica para procesar la URL y enviarla al servidor
+    document.getElementById('btn-confirm-yt-import').addEventListener('click', () => {
+        const input = document.getElementById('input-yt-playlist-url');
+        const url = input.value.trim();
+
+        // Extraemos solo la ID de la lista de reproducción
+        const listRegex = /[?&]list=([^#\&\?]+)/;
+        const match = url.match(listRegex);
+
+        if (!match || !match[1]) {
+            input.style.borderColor = 'var(--danger)';
+            setTimeout(() => input.style.borderColor = 'var(--border-color)', 1000);
+            return;
+        }
+
+        // Cambiamos el botón para avisar que está trabajando
+        const btn = document.getElementById('btn-confirm-yt-import');
+        btn.innerText = "IMPORTANDO (PUEDE TARDAR)...";
+        btn.style.opacity = "0.7";
+        btn.style.pointerEvents = "none";
+
+        // Le mandamos la ID limpia al evento de tu server.lua
+        fetchToLua('importYouTubePlaylist', {
+            ytPlaylistId: match[1]
+        });
+    });
+});
+
+// ==========================================
 // ACCIÓN: EDITAR PLAYLIST (PETICIÓN A LUA)
 // ==========================================
 function openModalEdit(id, isOwner) {
@@ -1059,10 +1179,7 @@ function renderEditModal(data) {
             ${generateToggleHTML('perm_rename', 'Renombrar Lista', 'Permitir cambiar el nombre')}
             ${generateToggleHTML('perm_delete', 'Eliminar Canciones', 'Permitir borrar temas')}
             ${generateToggleHTML('perm_add', 'Añadir Canciones', 'Permitir guardar nuevos temas')}
-            ${generateToggleHTML('perm_reorder', 'Cambiar Orden', 'Permitir mover canciones')}
             ${generateToggleHTML('perm_manage', 'Gestionar Personas', 'Permitir editar permisos')}
-            ${generateToggleHTML('perm_future1', 'Opción Futura 1', 'Reservado')}
-            ${generateToggleHTML('perm_future2', 'Opción Futura 2', 'Reservado')}
         </div>
     ` : `
         <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 4px; text-align: center; margin-top: 10px;">
@@ -1102,10 +1219,7 @@ function renderEditModal(data) {
                     document.getElementById('toggle-perm_rename').checked = member.perm_rename === 1;
                     document.getElementById('toggle-perm_delete').checked = member.perm_delete === 1;
                     document.getElementById('toggle-perm_add').checked = member.perm_add === 1;
-                    document.getElementById('toggle-perm_reorder').checked = member.perm_reorder === 1;
                     document.getElementById('toggle-perm_manage').checked = member.perm_manage === 1;
-                    document.getElementById('toggle-perm_future1').checked = member.perm_future1 === 1;
-                    document.getElementById('toggle-perm_future2').checked = member.perm_future2 === 1;
                 }
             }
         });
@@ -1124,10 +1238,7 @@ function renderEditModal(data) {
                     perm_rename: document.getElementById('toggle-perm_rename').checked ? 1 : 0,
                     perm_delete: document.getElementById('toggle-perm_delete').checked ? 1 : 0,
                     perm_add: document.getElementById('toggle-perm_add').checked ? 1 : 0,
-                    perm_reorder: document.getElementById('toggle-perm_reorder').checked ? 1 : 0,
                     perm_manage: document.getElementById('toggle-perm_manage').checked ? 1 : 0,
-                    perm_future1: document.getElementById('toggle-perm_future1').checked ? 1 : 0,
-                    perm_future2: document.getElementById('toggle-perm_future2').checked ? 1 : 0
                 };
             }
 
@@ -1831,7 +1942,7 @@ window.cancelDragMode = () => {
     dragContainer.style.top = initialTop;
     dragContainer.style.left = initialLeft;
 
-    // 🪄 NUEVO: Re-evaluar por si hemos cancelado estando en un borde
+    // Re-evaluar por si hemos cancelado estando en un borde
     let xPixels = window.innerWidth / 2; // Centro por defecto
     if (initialLeft && initialLeft.includes('%')) {
         xPixels = (parseFloat(initialLeft) / 100) * window.innerWidth;

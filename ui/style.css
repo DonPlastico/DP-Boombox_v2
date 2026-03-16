@@ -982,7 +982,7 @@ button {
     overflow: hidden !important;
     padding: 5px !important;
     transition: height 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), background 0.3s ease !important;
-    z-index: 300 !important;
+    z-index: 100 !important;
 }
 
 .extra-btn.active-state {
@@ -1071,7 +1071,7 @@ button {
     border-radius: 4px;
     overflow: hidden;
     transition: height 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), background 0.3s ease;
-    z-index: 300;
+    z-index: 100 !important;
 }
 
 .volume-pill:hover {

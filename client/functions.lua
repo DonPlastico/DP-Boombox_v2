@@ -35,44 +35,71 @@ hayRadioCerca = function(coords, entityIgnore, radioMax)
     end
     return false
 end
+
 equiparRadio = function(radioEntidad)
     local equipada = true
     CreateThread(function()
         local uiMostrada = false -- Lo controlamos dinámicamente
+        local lastPosUpdate = 0 -- Temporizador para sincronizar el sonido
 
         while equipada do
             Wait(0)
             local jugador = PlayerPedId()
             local playerCoords = GetEntityCoords(jugador)
 
+            -- ============================================
+            -- 🎵 MAGIA DE SONIDO: ACTUALIZAR POSICIÓN EN VIVO
+            -- ============================================
+            if GetGameTimer() - lastPosUpdate > 250 then
+                lastPosUpdate = GetGameTimer()
+
+                if radiosActivas[radioEntidad] then
+                    local currentPos = GetEntityCoords(radioEntidad)
+                    radiosActivas[radioEntidad].pos = currentPos
+
+                    -- Si está sonando, avisamos a todo el servidor de las nuevas coordenadas
+                    if radiosActivas[radioEntidad].data.estado == "reproduciendo" then
+                        local idMusica = 'id_' .. radioEntidad
+                        TriggerServerEvent("DP-Boombox_v2:soundStatus", "position", idMusica, {
+                            position = currentPos
+                        })
+                    end
+                end
+            end
+
             -- AUTO-SOLTAR AL INTENTAR SUBIR A UN COCHE
-            -- Detecta si estás intentando abrir una puerta o si, por algún bug, ya estás dentro
             if GetVehiclePedIsTryingToEnter(jugador) ~= 0 or IsPedInAnyVehicle(jugador, false) then
                 equipada = false
                 if uiMostrada then
                     exports['DP-TextUI']:OcultarUI('radio_soltar')
                 end
 
-                -- Soltamos el objeto inmediatamente en el suelo
                 DetachEntity(radioEntidad)
                 PlaceObjectOnGroundProperly(radioEntidad)
                 FreezeEntityPosition(radioEntidad, true)
-                
+
                 mandarNotificacion('Aviso', 'Has soltado el altavoz para poder subirte al vehículo.', 'error')
 
-                if radiosActivas[radioEntidad] and
-                    (radiosActivas[radioEntidad].data.estado == "reproduciendo" or
-                        radiosActivas[radioEntidad].data.estado == "pausado") then
+                -- 📍 ACTUALIZACIÓN FINAL DE POSICIÓN AL SOLTAR
+                if radiosActivas[radioEntidad] then
+                    radiosActivas[radioEntidad].pos = GetEntityCoords(radioEntidad)
                     TriggerServerEvent('DP-Boombox_v2:syncActive', radiosActivas)
+
+                    if radiosActivas[radioEntidad].data.estado == "reproduciendo" then
+                        local idMusica = 'id_' .. radioEntidad
+                        TriggerServerEvent("DP-Boombox_v2:soundStatus", "position", idMusica, {
+                            position = radiosActivas[radioEntidad].pos
+                        })
+                    end
                 end
-                
+
                 break -- Salimos del bucle para terminar la función
             end
 
-            -- Comprobamos si hay otro altavoz a menos de 10.0 metros (ignorando el que llevamos en la mano)
+            -- Comprobamos si hay otro altavoz a menos de 10.0 metros
             local cercaDeOtra = hayRadioCerca(playerCoords, radioEntidad, 10.0)
 
-            -- 🔄 CONTROL DINÁMICO DE LA UI (Aparece y desaparece al caminar)
+            -- 🔄 CONTROL DINÁMICO DE LA UI
             if cercaDeOtra and uiMostrada then
                 exports['DP-TextUI']:OcultarUI('radio_soltar')
                 uiMostrada = false
@@ -92,30 +119,43 @@ equiparRadio = function(radioEntidad)
                 PlaceObjectOnGroundProperly(radioEntidad)
                 FreezeEntityPosition(radioEntidad, true)
 
-                if radiosActivas[radioEntidad] and
-                    (radiosActivas[radioEntidad].data.estado == "reproduciendo" or
-                        radiosActivas[radioEntidad].data.estado == "pausado") then
+                -- 📍 ACTUALIZACIÓN FINAL DE POSICIÓN AL SOLTAR
+                if radiosActivas[radioEntidad] then
+                    radiosActivas[radioEntidad].pos = GetEntityCoords(radioEntidad)
                     TriggerServerEvent('DP-Boombox_v2:syncActive', radiosActivas)
+
+                    if radiosActivas[radioEntidad].data.estado == "reproduciendo" then
+                        local idMusica = 'id_' .. radioEntidad
+                        TriggerServerEvent("DP-Boombox_v2:soundStatus", "position", idMusica, {
+                            position = radiosActivas[radioEntidad].pos
+                        })
+                    end
                 end
             end
 
-            -- GUARDAR EN INVENTARIO (TECLA G)
+            -- GUARDAR DIRECTO EN INVENTARIO (TECLA G) - FIX ANTI-PÉRDIDAS
             if IsControlJustPressed(0, 47) then
                 equipada = false
                 if uiMostrada then
                     exports['DP-TextUI']:OcultarUI('radio_soltar')
                 end
 
-                DeleteEntity(radioEntidad)
-                if Framework == "ESX" then
-                    TriggerServerEvent('DP-Boombox_v2:giveItem', 'speaker')
-                elseif Framework == "qb" then
-                    TriggerServerEvent('DP-Boombox_v2:giveItem', 'boombox')
+                local idMusica = 'id_' .. radioEntidad
+
+                -- 1. Apagamos la música globalmente para todos
+                if exports.xsound:soundExists(idMusica) then
+                    TriggerServerEvent("DP-Boombox_v2:soundStatus", "stop", idMusica, {})
                 end
 
+                -- 2. Borramos de la lista activa
                 if radiosActivas[radioEntidad] then
-                    TriggerServerEvent('DP-Boombox_v2:stopMusic', radioEntidad)
+                    radiosActivas[radioEntidad] = nil
+                    TriggerServerEvent('DP-Boombox_v2:syncActive', radiosActivas)
                 end
+
+                -- 3. Quitamos la entidad de la red y nos damos el ítem 
+                -- (Usando el evento seguro de recolección que creamos antes)
+                TriggerServerEvent("DP-Boombox_v2:deleteObj", ObjToNet(radioEntidad))
             end
         end
     end)
